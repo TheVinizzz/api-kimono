@@ -118,10 +118,15 @@ const gracefulShutdown = (signal: string) => {
   console.log(`⚠️  Recebido sinal ${signal} após ${uptime}s de uptime`);
   console.log(`📊 Stats: ${requestCount} requests, ${healthCheckCount} health checks`);
   
-  // EM PRODUÇÃO, IGNORAR SIGTERM SE VEIO MUITO CEDO (possível problema do EasyPanel)
-  if (process.env.NODE_ENV === 'production' && signal === 'SIGTERM' && uptime < 30) {
-    console.log('🚫 Ignorando SIGTERM prematuro em produção (uptime < 30s)');
-    return;
+  // EM PRODUÇÃO, IGNORAR SIGTERM COMPLETAMENTE POR 5 MINUTOS
+  if (process.env.NODE_ENV === 'production' && signal === 'SIGTERM') {
+    if (uptime < 300) { // 5 minutos
+      console.log(`🚫 IGNORANDO SIGTERM em produção (uptime: ${uptime}s < 300s)`);
+      console.log(`🔄 EasyPanel pode estar causando restarts prematuros`);
+      return;
+    } else {
+      console.log(`✅ SIGTERM aceito após 5+ minutos de uptime`);
+    }
   }
   
   if (isShuttingDown) {
@@ -191,6 +196,12 @@ server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`🌐 Escutando em 0.0.0.0:${PORT}`);
   console.log(`💾 Memória inicial: ${JSON.stringify(process.memoryUsage())}`);
   console.log(`⏰ Iniciado em: ${new Date().toISOString()}`);
+  
+  // Notificar PM2 que a aplicação está pronta
+  if (process.send) {
+    process.send('ready');
+    console.log('📨 PM2 notificado que aplicação está pronta');
+  }
 });
 
 // Configurar timeout para keep-alive
