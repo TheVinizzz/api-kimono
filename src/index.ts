@@ -2,6 +2,7 @@ import express, { ErrorRequestHandler } from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import config from './config';
+import { Server } from 'http';
 
 // Importar rotas
 import authRoutes from './routes/auth.routes';
@@ -20,6 +21,7 @@ import { trackPageVisit } from './middleware/analytics.middleware';
 
 // Inicializar o app
 const app = express();
+let server: Server;
 
 // Configuração CORS unificada e permissiva
 app.use(cors({
@@ -34,7 +36,8 @@ app.use(cors({
 }));
 
 // Outros middlewares
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
 // Logging de requisições
@@ -60,7 +63,12 @@ app.use('/api/product-images', productImagesRoutes);
 
 // Rota de saúde para verificação
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    memory: process.memoryUsage(),
+    uptime: process.uptime()
+  });
 });
 
 // Middleware para rotas não encontradas
@@ -76,9 +84,53 @@ const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
 
 app.use(errorHandler);
 
+// Função para graceful shutdown
+const gracefulShutdown = (signal: string) => {
+  console.log(`Recebido sinal ${signal}. Iniciando graceful shutdown...`);
+  
+  if (server) {
+    server.close((err) => {
+      if (err) {
+        console.error('Erro durante o shutdown:', err);
+        process.exit(1);
+      }
+      console.log('Servidor fechado com sucesso');
+      process.exit(0);
+    });
+    
+    // Forçar shutdown após 30 segundos
+    setTimeout(() => {
+      console.error('Forçando shutdown após timeout');
+      process.exit(1);
+    }, 30000);
+  } else {
+    process.exit(0);
+  }
+};
+
+// Tratar sinais de terminação
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Tratar exceções não capturadas
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  gracefulShutdown('uncaughtException');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  gracefulShutdown('unhandledRejection');
+});
+
 // Iniciar o servidor
 const PORT = config.port;
-app.listen(PORT, () => {
+server = app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
   console.log(`URL da API: http://localhost:${PORT}`);
-}); 
+  console.log(`Memória inicial: ${JSON.stringify(process.memoryUsage())}`);
+});
+
+// Configurar timeout para keep-alive
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000; 
