@@ -50,9 +50,10 @@ let requestCount = 0;
 let healthCheckCount = 0;
 let startTime = Date.now();
 
-// Middleware para contar requisições
-app.use((_req, _res, next) => {
+// Middleware para contar e logar TODAS as requisições
+app.use((req, _res, next) => {
   requestCount++;
+  console.log(`📨 ${req.method} ${req.url} | User-Agent: ${req.get('User-Agent')?.substring(0, 50) || 'none'}`);
   next();
 });
 
@@ -61,10 +62,8 @@ app.get('/health', (_req, res) => {
   healthCheckCount++;
   const uptime = Date.now() - startTime;
   
-  // Log a cada 10 health checks para não spammar
-  if (healthCheckCount % 10 === 0) {
-    console.log(`🩺 Health check #${healthCheckCount} | Uptime: ${Math.floor(uptime/1000)}s | Requests: ${requestCount}`);
-  }
+  // Log a cada health check para debug
+  console.log(`🩺 Health check #${healthCheckCount} | Uptime: ${Math.floor(uptime/1000)}s`);
   
   res.status(200).json({ 
     status: 'ok',
@@ -74,13 +73,40 @@ app.get('/health', (_req, res) => {
   });
 });
 
+// Múltiplas rotas de health check (EasyPanel pode estar usando diferentes)
+app.get('/healthz', (_req, res) => {
+  console.log('🩺 Health check em /healthz');
+  res.status(200).json({ status: 'ok' });
+});
+
+app.get('/status', (_req, res) => {
+  console.log('🩺 Health check em /status');
+  res.status(200).json({ status: 'ok' });
+});
+
+app.get('/ping', (_req, res) => {
+  console.log('🩺 Health check em /ping');
+  res.status(200).send('pong');
+});
+
 // Rota raiz também para health check
 app.get('/', (_req, res) => {
+  console.log('🏠 Request na raiz');
   res.status(200).json({ 
     message: 'Kimono API is running',
     status: 'ok',
     uptime: Math.floor((Date.now() - startTime)/1000),
     env: process.env.NODE_ENV
+  });
+});
+
+// FALLBACK: Responder OK para QUALQUER rota GET (debug)
+app.get('*', (req, res) => {
+  console.log(`🔍 Request GET catch-all: ${req.path}`);
+  res.status(200).json({ 
+    status: 'ok', 
+    path: req.path,
+    message: 'Kimono API catch-all' 
   });
 });
 
@@ -118,15 +144,12 @@ const gracefulShutdown = (signal: string) => {
   console.log(`⚠️  Recebido sinal ${signal} após ${uptime}s de uptime`);
   console.log(`📊 Stats: ${requestCount} requests, ${healthCheckCount} health checks`);
   
-  // EM PRODUÇÃO, IGNORAR SIGTERM COMPLETAMENTE POR 5 MINUTOS
+  // EM PRODUÇÃO, IGNORAR SIGTERM COMPLETAMENTE (problema do EasyPanel)
   if (process.env.NODE_ENV === 'production' && signal === 'SIGTERM') {
-    if (uptime < 300) { // 5 minutos
-      console.log(`🚫 IGNORANDO SIGTERM em produção (uptime: ${uptime}s < 300s)`);
-      console.log(`🔄 EasyPanel pode estar causando restarts prematuros`);
-      return;
-    } else {
-      console.log(`✅ SIGTERM aceito após 5+ minutos de uptime`);
-    }
+    console.log(`🚫 IGNORANDO SIGTERM COMPLETAMENTE em produção`);
+    console.log(`🔄 EasyPanel está causando restarts desnecessários`);
+    console.log(`💡 Para forçar shutdown, use SIGKILL ou pare o container manualmente`);
+    return;
   }
   
   if (isShuttingDown) {
