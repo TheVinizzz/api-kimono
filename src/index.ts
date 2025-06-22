@@ -37,41 +37,24 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
-// Logging de requisições
-app.use((req, _res, next) => {
-  console.log(`${req.method} ${req.url}`);
-  next();
-});
-
-// Middleware de analytics para rastrear visitas (com tratamento de erro)
-app.use(async (req, res, next) => {
-  try {
-    // Importar dynamicamente para evitar problemas de inicialização
-    const { trackPageVisit } = await import('./middleware/analytics.middleware');
-    await trackPageVisit(req, res, next);
-  } catch (error) {
-    console.warn('Erro no analytics middleware:', error);
-    next(); // Continuar mesmo se analytics falhar
-  }
-});
-
-// Rotas de saúde primeiro (para health checks)
-app.get('/health', (_req, res) => {
-  res.status(200).json({ 
-    status: 'ok', 
-    timestamp: new Date().toISOString(),
-    memory: process.memoryUsage(),
-    uptime: process.uptime(),
-    env: process.env.NODE_ENV || 'development'
+// Logging de requisições apenas em desenvolvimento
+if (process.env.NODE_ENV !== 'production') {
+  app.use((req, _res, next) => {
+    console.log(`${req.method} ${req.url}`);
+    next();
   });
+}
+
+// Rotas de saúde primeiro (para health checks) - resposta mais rápida
+app.get('/health', (_req, res) => {
+  res.status(200).json({ status: 'ok' });
 });
 
 // Rota raiz também para health check
 app.get('/', (_req, res) => {
   res.status(200).json({ 
     message: 'Kimono API is running',
-    status: 'ok',
-    timestamp: new Date().toISOString()
+    status: 'ok'
   });
 });
 
@@ -100,25 +83,34 @@ const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
 
 app.use(errorHandler);
 
-// Função para graceful shutdown
+// Variável para controlar shutdown
+let isShuttingDown = false;
+
+// Função para graceful shutdown mais agressiva para EasyPanel
 const gracefulShutdown = (signal: string) => {
+  if (isShuttingDown) {
+    console.log('Shutdown já em andamento...');
+    return;
+  }
+  
+  isShuttingDown = true;
   console.log(`Recebido sinal ${signal}. Iniciando graceful shutdown...`);
   
   if (server) {
     server.close((err) => {
       if (err) {
         console.error('Erro durante o shutdown:', err);
-        process.exit(1);
+      } else {
+        console.log('Servidor fechado com sucesso');
       }
-      console.log('Servidor fechado com sucesso');
       process.exit(0);
     });
     
-    // Forçar shutdown após 30 segundos
+    // Forçar shutdown após 5 segundos (mais rápido para EasyPanel)
     setTimeout(() => {
-      console.error('Forçando shutdown após timeout');
-      process.exit(1);
-    }, 30000);
+      console.log('Forçando shutdown após timeout');
+      process.exit(0);
+    }, 5000);
   } else {
     process.exit(0);
   }
@@ -128,10 +120,9 @@ const gracefulShutdown = (signal: string) => {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// Tratar exceções não capturadas
+// Em produção, não fazer shutdown por erros menores
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
-  // Em produção, não fazer graceful shutdown imediatamente
   if (process.env.NODE_ENV === 'production') {
     console.error('Continuando execução em produção...');
   } else {
@@ -141,7 +132,6 @@ process.on('uncaughtException', (err) => {
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  // Em produção, não fazer graceful shutdown imediatamente
   if (process.env.NODE_ENV === 'production') {
     console.error('Continuando execução em produção...');
   } else {
@@ -151,13 +141,26 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // Iniciar o servidor
 const PORT = Number(process.env.PORT) || Number(config.port) || 4000;
+
+console.log(`🚀 Iniciando servidor na porta ${PORT}...`);
+console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+
 server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-  console.log(`URL da API: http://localhost:${PORT}`);
-  console.log(`Memória inicial: ${JSON.stringify(process.memoryUsage())}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`✅ Servidor rodando na porta ${PORT}`);
+  console.log(`🌐 Escutando em 0.0.0.0:${PORT}`);
+  console.log(`💾 Memória inicial: ${JSON.stringify(process.memoryUsage())}`);
 });
 
 // Configurar timeout para keep-alive
 server.keepAliveTimeout = 65000;
-server.headersTimeout = 66000; 
+server.headersTimeout = 66000;
+
+// Middleware para detectar se EasyPanel está fazendo health checks frequentes
+let healthCheckCount = 0;
+app.use('/health', (_req, res, next) => {
+  healthCheckCount++;
+  if (healthCheckCount % 10 === 0) {
+    console.log(`🩺 Health check #${healthCheckCount}`);
+  }
+  next();
+}); 
