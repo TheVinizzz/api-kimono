@@ -45,16 +45,42 @@ if (process.env.NODE_ENV !== 'production') {
   });
 }
 
+// Variáveis para debug do EasyPanel
+let requestCount = 0;
+let healthCheckCount = 0;
+let startTime = Date.now();
+
+// Middleware para contar requisições
+app.use((_req, _res, next) => {
+  requestCount++;
+  next();
+});
+
 // Rotas de saúde primeiro (para health checks) - resposta mais rápida
 app.get('/health', (_req, res) => {
-  res.status(200).json({ status: 'ok' });
+  healthCheckCount++;
+  const uptime = Date.now() - startTime;
+  
+  // Log a cada 10 health checks para não spammar
+  if (healthCheckCount % 10 === 0) {
+    console.log(`🩺 Health check #${healthCheckCount} | Uptime: ${Math.floor(uptime/1000)}s | Requests: ${requestCount}`);
+  }
+  
+  res.status(200).json({ 
+    status: 'ok',
+    uptime: Math.floor(uptime/1000),
+    requests: requestCount,
+    healthChecks: healthCheckCount
+  });
 });
 
 // Rota raiz também para health check
 app.get('/', (_req, res) => {
   res.status(200).json({ 
     message: 'Kimono API is running',
-    status: 'ok'
+    status: 'ok',
+    uptime: Math.floor((Date.now() - startTime)/1000),
+    env: process.env.NODE_ENV
   });
 });
 
@@ -86,15 +112,25 @@ app.use(errorHandler);
 // Variável para controlar shutdown
 let isShuttingDown = false;
 
-// Função para graceful shutdown mais agressiva para EasyPanel
+// Função para graceful shutdown
 const gracefulShutdown = (signal: string) => {
+  const uptime = Math.floor((Date.now() - startTime)/1000);
+  console.log(`⚠️  Recebido sinal ${signal} após ${uptime}s de uptime`);
+  console.log(`📊 Stats: ${requestCount} requests, ${healthCheckCount} health checks`);
+  
+  // EM PRODUÇÃO, IGNORAR SIGTERM SE VEIO MUITO CEDO (possível problema do EasyPanel)
+  if (process.env.NODE_ENV === 'production' && signal === 'SIGTERM' && uptime < 30) {
+    console.log('🚫 Ignorando SIGTERM prematuro em produção (uptime < 30s)');
+    return;
+  }
+  
   if (isShuttingDown) {
     console.log('Shutdown já em andamento...');
     return;
   }
   
   isShuttingDown = true;
-  console.log(`Recebido sinal ${signal}. Iniciando graceful shutdown...`);
+  console.log(`Iniciando graceful shutdown...`);
   
   if (server) {
     server.close((err) => {
@@ -106,7 +142,7 @@ const gracefulShutdown = (signal: string) => {
       process.exit(0);
     });
     
-    // Forçar shutdown após 5 segundos (mais rápido para EasyPanel)
+    // Forçar shutdown após 5 segundos
     setTimeout(() => {
       console.log('Forçando shutdown após timeout');
       process.exit(0);
@@ -139,28 +175,31 @@ process.on('unhandledRejection', (reason, promise) => {
   }
 });
 
+// Log detalhado do ambiente
+console.log(`🚀 Iniciando Kimono API...`);
+console.log(`📍 NODE_ENV: ${process.env.NODE_ENV || 'development'}`);
+console.log(`🔌 PORT: ${process.env.PORT || 'default'}`);
+console.log(`🐳 Container: ${process.env.HOSTNAME || 'local'}`);
+console.log(`💻 Platform: ${process.platform} ${process.arch}`);
+console.log(`📦 Node.js: ${process.version}`);
+
 // Iniciar o servidor
 const PORT = Number(process.env.PORT) || Number(config.port) || 4000;
-
-console.log(`🚀 Iniciando servidor na porta ${PORT}...`);
-console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
 
 server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
   console.log(`🌐 Escutando em 0.0.0.0:${PORT}`);
   console.log(`💾 Memória inicial: ${JSON.stringify(process.memoryUsage())}`);
+  console.log(`⏰ Iniciado em: ${new Date().toISOString()}`);
 });
 
 // Configurar timeout para keep-alive
 server.keepAliveTimeout = 65000;
 server.headersTimeout = 66000;
 
-// Middleware para detectar se EasyPanel está fazendo health checks frequentes
-let healthCheckCount = 0;
-app.use('/health', (_req, res, next) => {
-  healthCheckCount++;
-  if (healthCheckCount % 10 === 0) {
-    console.log(`🩺 Health check #${healthCheckCount}`);
-  }
-  next();
-}); 
+// Log periódico do status (a cada 60 segundos)
+setInterval(() => {
+  const uptime = Math.floor((Date.now() - startTime)/1000);
+  const memory = process.memoryUsage();
+  console.log(`📊 Status: ${uptime}s uptime | ${requestCount} requests | ${healthCheckCount} health checks | ${Math.floor(memory.rss/1024/1024)}MB RAM`);
+}, 60000); 
