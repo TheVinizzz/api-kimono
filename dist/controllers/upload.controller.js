@@ -16,7 +16,6 @@ exports.UploadController = exports.uploadProductImages = exports.uploadImages = 
 const minio_service_1 = require("../services/minio.service");
 const uuid_1 = require("uuid");
 const multer_1 = __importDefault(require("multer"));
-const path_1 = __importDefault(require("path"));
 const minioService = new minio_service_1.MinioService();
 // Configuração do multer para armazenar arquivos na memória
 const storage = multer_1.default.memoryStorage();
@@ -127,26 +126,21 @@ class UploadController {
         return __awaiter(this, void 0, void 0, function* () {
             try {
                 if (!req.file) {
-                    return res.status(400).json({ error: 'Nenhum arquivo foi enviado' });
+                    return res.status(400).json({ error: 'Nenhum arquivo enviado' });
                 }
-                const fileExtension = path_1.default.extname(req.file.originalname).toLowerCase();
-                const fileName = `${(0, uuid_1.v4)()}${fileExtension}`;
+                const file = req.file;
+                const fileName = `product-${(0, uuid_1.v4)()}-${file.originalname}`;
                 const folder = 'products';
-                const fileUrl = yield minioService.uploadFile(folder, fileName, req.file.buffer, req.file.mimetype);
+                const fileUrl = yield minioService.uploadFile(folder, fileName, file.buffer, file.mimetype);
                 res.json({
-                    success: true,
+                    message: 'Imagem do produto enviada com sucesso',
                     fileUrl,
                     fileName,
-                    originalName: req.file.originalname,
-                    size: req.file.size,
-                    mimetype: req.file.mimetype
                 });
             }
             catch (error) {
-                console.error('Erro no upload de imagem do produto:', error);
-                res.status(500).json({
-                    error: 'Erro interno do servidor ao fazer upload da imagem'
-                });
+                console.error('Erro no upload da imagem do produto:', error);
+                res.status(500).json({ error: 'Erro interno do servidor' });
             }
         });
     }
@@ -155,62 +149,28 @@ class UploadController {
         return __awaiter(this, void 0, void 0, function* () {
             try {
                 if (!req.file) {
-                    return res.status(400).json({ error: 'Nenhum arquivo foi enviado' });
+                    return res.status(400).json({ error: 'Nenhum arquivo enviado' });
                 }
-                const fileExtension = path_1.default.extname(req.file.originalname).toLowerCase();
-                const fileName = `${(0, uuid_1.v4)()}${fileExtension}`;
+                const file = req.file;
+                const fileName = `category-${(0, uuid_1.v4)()}-${file.originalname}`;
                 const folder = 'categories';
-                const fileUrl = yield minioService.uploadFile(folder, fileName, req.file.buffer, req.file.mimetype);
+                const fileUrl = yield minioService.uploadFile(folder, fileName, file.buffer, file.mimetype);
                 res.json({
-                    success: true,
+                    message: 'Imagem da categoria enviada com sucesso',
                     fileUrl,
                     fileName,
-                    originalName: req.file.originalname,
-                    size: req.file.size,
-                    mimetype: req.file.mimetype
                 });
             }
             catch (error) {
-                console.error('Erro no upload de imagem da categoria:', error);
-                res.status(500).json({
-                    error: 'Erro interno do servidor ao fazer upload da imagem'
-                });
+                console.error('Erro no upload da imagem da categoria:', error);
+                res.status(500).json({ error: 'Erro interno do servidor' });
             }
         });
     }
     // Upload múltiplo de imagens
     static uploadMultipleImages(req, res) {
         return __awaiter(this, void 0, void 0, function* () {
-            try {
-                const files = req.files;
-                if (!files || files.length === 0) {
-                    return res.status(400).json({ error: 'Nenhum arquivo foi enviado' });
-                }
-                const folder = req.body.folder || 'misc';
-                const uploadResults = [];
-                for (const file of files) {
-                    const fileExtension = path_1.default.extname(file.originalname).toLowerCase();
-                    const fileName = `${(0, uuid_1.v4)()}${fileExtension}`;
-                    const fileUrl = yield minioService.uploadFile(folder, fileName, file.buffer, file.mimetype);
-                    uploadResults.push({
-                        fileUrl,
-                        fileName,
-                        originalName: file.originalname,
-                        size: file.size,
-                        mimetype: file.mimetype
-                    });
-                }
-                res.json({
-                    success: true,
-                    files: uploadResults
-                });
-            }
-            catch (error) {
-                console.error('Erro no upload múltiplo de imagens:', error);
-                res.status(500).json({
-                    error: 'Erro interno do servidor ao fazer upload das imagens'
-                });
-            }
+            return (0, exports.uploadImages)(req, res);
         });
     }
     // Deletar arquivo
@@ -222,16 +182,11 @@ class UploadController {
                     return res.status(400).json({ error: 'Nome do arquivo é obrigatório' });
                 }
                 yield minioService.deleteFile(fileName);
-                res.json({
-                    success: true,
-                    message: 'Arquivo deletado com sucesso'
-                });
+                res.json({ message: 'Arquivo removido com sucesso' });
             }
             catch (error) {
-                console.error('Erro ao deletar arquivo:', error);
-                res.status(500).json({
-                    error: 'Erro interno do servidor ao deletar arquivo'
-                });
+                console.error('Erro ao remover arquivo:', error);
+                res.status(500).json({ error: 'Erro interno do servidor' });
             }
         });
     }
@@ -241,19 +196,11 @@ class UploadController {
             try {
                 const { folder } = req.query;
                 const files = yield minioService.listFiles(folder);
-                res.json({
-                    success: true,
-                    files: files.map(fileName => ({
-                        fileName,
-                        url: minioService.getPublicUrl(fileName)
-                    }))
-                });
+                res.json({ files });
             }
             catch (error) {
                 console.error('Erro ao listar arquivos:', error);
-                res.status(500).json({
-                    error: 'Erro interno do servidor ao listar arquivos'
-                });
+                res.status(500).json({ error: 'Erro interno do servidor' });
             }
         });
     }
@@ -261,23 +208,20 @@ class UploadController {
     static generateUploadUrl(req, res) {
         return __awaiter(this, void 0, void 0, function* () {
             try {
-                const { fileName, contentType } = req.body;
-                if (!fileName) {
-                    return res.status(400).json({ error: 'Nome do arquivo é obrigatório' });
+                const { objectName, contentType, expirySeconds } = req.body;
+                if (!objectName) {
+                    return res.status(400).json({ error: 'Nome do objeto é obrigatório' });
                 }
-                const uploadUrl = yield minioService.generateUploadUrl(fileName, 3600, // 1 hora
-                contentType || 'image/*');
+                const uploadUrl = yield minioService.generateUploadUrl(objectName, expirySeconds || 3600, contentType || 'image/*');
                 res.json({
-                    success: true,
                     uploadUrl,
-                    publicUrl: minioService.getPublicUrl(fileName)
+                    objectName,
+                    expiresIn: expirySeconds || 3600,
                 });
             }
             catch (error) {
                 console.error('Erro ao gerar URL de upload:', error);
-                res.status(500).json({
-                    error: 'Erro interno do servidor ao gerar URL de upload'
-                });
+                res.status(500).json({ error: 'Erro interno do servidor' });
             }
         });
     }

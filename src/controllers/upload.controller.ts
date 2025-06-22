@@ -3,6 +3,7 @@ import { MinioService } from '../services/minio.service';
 import { v4 as uuidv4 } from 'uuid';
 import multer from 'multer';
 import path from 'path';
+import { MulterFile, MulterRequest as IMulterRequest } from '../types/multer.types';
 
 // Extender a interface Request para incluir file e files do multer
 declare global {
@@ -15,11 +16,6 @@ declare global {
 }
 
 const minioService = new MinioService();
-
-interface MulterRequest extends Request {
-  file?: any;
-  files?: any[] | { [fieldname: string]: any[] };
-}
 
 // Configuração do multer para armazenar arquivos na memória
 const storage = multer.memoryStorage();
@@ -42,13 +38,13 @@ const upload = multer({
 export const uploadSingle = upload.single('image');
 export const uploadMultiple = upload.array('images', 10);
 
-export const uploadImage = async (req: MulterRequest, res: Response) => {
+export const uploadImage = async (req: Request & IMulterRequest, res: Response) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'Nenhum arquivo enviado' });
     }
 
-    const file = req.file;
+    const file = req.file as MulterFile;
     const fileName = `${uuidv4()}-${file.originalname}`;
     const folder = 'uploads';
 
@@ -70,14 +66,14 @@ export const uploadImage = async (req: MulterRequest, res: Response) => {
   }
 };
 
-export const uploadImages = async (req: MulterRequest, res: Response) => {
+export const uploadImages = async (req: Request & IMulterRequest, res: Response) => {
   try {
     if (!req.files || !Array.isArray(req.files) || req.files.length === 0) {
       return res.status(400).json({ error: 'Nenhum arquivo enviado' });
     }
 
-    const files = req.files;
-    const uploadPromises = files.map(async (file: any) => {
+    const files = req.files as MulterFile[];
+    const uploadPromises = files.map(async (file: MulterFile) => {
       const fileName = `${uuidv4()}-${file.originalname}`;
       const folder = 'uploads';
 
@@ -108,20 +104,20 @@ export const uploadImages = async (req: MulterRequest, res: Response) => {
   }
 };
 
-export const uploadProductImages = async (req: MulterRequest, res: Response) => {
+export const uploadProductImages = async (req: Request & IMulterRequest, res: Response) => {
   try {
     if (!req.files || !Array.isArray(req.files) || req.files.length === 0) {
       return res.status(400).json({ error: 'Nenhum arquivo enviado' });
     }
 
-    const files = req.files as any[];
+    const files = req.files as MulterFile[];
     const productId = req.body.productId;
 
     if (!productId) {
       return res.status(400).json({ error: 'ID do produto é obrigatório' });
     }
 
-    const uploadPromises = files.map(async (file: any, index: number) => {
+    const uploadPromises = files.map(async (file: MulterFile, index: number) => {
       const fileName = `product-${productId}-${uuidv4()}-${file.originalname}`;
       const folder = 'products';
 
@@ -156,115 +152,66 @@ export const uploadProductImages = async (req: MulterRequest, res: Response) => 
 export class UploadController {
   
   // Upload de imagem de produto
-  static async uploadProductImage(req: Request, res: Response) {
+  static async uploadProductImage(req: Request & IMulterRequest, res: Response) {
     try {
       if (!req.file) {
-        return res.status(400).json({ error: 'Nenhum arquivo foi enviado' });
+        return res.status(400).json({ error: 'Nenhum arquivo enviado' });
       }
 
-      const fileExtension = path.extname(req.file.originalname).toLowerCase();
-      const fileName = `${uuidv4()}${fileExtension}`;
+      const file = req.file as MulterFile;
+      const fileName = `product-${uuidv4()}-${file.originalname}`;
       const folder = 'products';
 
       const fileUrl = await minioService.uploadFile(
         folder,
         fileName,
-        req.file.buffer,
-        req.file.mimetype
+        file.buffer,
+        file.mimetype
       );
 
       res.json({
-        success: true,
+        message: 'Imagem do produto enviada com sucesso',
         fileUrl,
         fileName,
-        originalName: req.file.originalname,
-        size: req.file.size,
-        mimetype: req.file.mimetype
       });
     } catch (error) {
-      console.error('Erro no upload de imagem do produto:', error);
-      res.status(500).json({ 
-        error: 'Erro interno do servidor ao fazer upload da imagem' 
-      });
+      console.error('Erro no upload da imagem do produto:', error);
+      res.status(500).json({ error: 'Erro interno do servidor' });
     }
   }
 
   // Upload de imagem de categoria
-  static async uploadCategoryImage(req: Request, res: Response) {
+  static async uploadCategoryImage(req: Request & IMulterRequest, res: Response) {
     try {
       if (!req.file) {
-        return res.status(400).json({ error: 'Nenhum arquivo foi enviado' });
+        return res.status(400).json({ error: 'Nenhum arquivo enviado' });
       }
 
-      const fileExtension = path.extname(req.file.originalname).toLowerCase();
-      const fileName = `${uuidv4()}${fileExtension}`;
+      const file = req.file as MulterFile;
+      const fileName = `category-${uuidv4()}-${file.originalname}`;
       const folder = 'categories';
 
       const fileUrl = await minioService.uploadFile(
         folder,
         fileName,
-        req.file.buffer,
-        req.file.mimetype
+        file.buffer,
+        file.mimetype
       );
 
       res.json({
-        success: true,
+        message: 'Imagem da categoria enviada com sucesso',
         fileUrl,
         fileName,
-        originalName: req.file.originalname,
-        size: req.file.size,
-        mimetype: req.file.mimetype
       });
     } catch (error) {
-      console.error('Erro no upload de imagem da categoria:', error);
-      res.status(500).json({ 
-        error: 'Erro interno do servidor ao fazer upload da imagem' 
-      });
+      console.error('Erro no upload da imagem da categoria:', error);
+      res.status(500).json({ error: 'Erro interno do servidor' });
     }
   }
 
   // Upload múltiplo de imagens
-  static async uploadMultipleImages(req: Request, res: Response) {
-    try {
-      const files = req.files as Express.Multer.File[];
-      
-      if (!files || files.length === 0) {
-        return res.status(400).json({ error: 'Nenhum arquivo foi enviado' });
-      }
-
-      const folder = req.body.folder || 'misc';
-      const uploadResults = [];
-
-      for (const file of files) {
-        const fileExtension = path.extname(file.originalname).toLowerCase();
-        const fileName = `${uuidv4()}${fileExtension}`;
-
-        const fileUrl = await minioService.uploadFile(
-          folder,
-          fileName,
-          file.buffer,
-          file.mimetype
-        );
-
-        uploadResults.push({
-          fileUrl,
-          fileName,
-          originalName: file.originalname,
-          size: file.size,
-          mimetype: file.mimetype
-        });
-      }
-
-      res.json({
-        success: true,
-        files: uploadResults
-      });
-    } catch (error) {
-      console.error('Erro no upload múltiplo de imagens:', error);
-      res.status(500).json({ 
-        error: 'Erro interno do servidor ao fazer upload das imagens' 
-      });
-    }
+  static async uploadMultipleImages(req: Request & IMulterRequest, res: Response) {
+    return uploadImages(req, res);
   }
 
   // Deletar arquivo
@@ -278,15 +225,10 @@ export class UploadController {
 
       await minioService.deleteFile(fileName);
 
-      res.json({
-        success: true,
-        message: 'Arquivo deletado com sucesso'
-      });
+      res.json({ message: 'Arquivo removido com sucesso' });
     } catch (error) {
-      console.error('Erro ao deletar arquivo:', error);
-      res.status(500).json({ 
-        error: 'Erro interno do servidor ao deletar arquivo' 
-      });
+      console.error('Erro ao remover arquivo:', error);
+      res.status(500).json({ error: 'Erro interno do servidor' });
     }
   }
 
@@ -297,46 +239,36 @@ export class UploadController {
       
       const files = await minioService.listFiles(folder as string);
 
-      res.json({
-        success: true,
-        files: files.map(fileName => ({
-          fileName,
-          url: minioService.getPublicUrl(fileName)
-        }))
-      });
+      res.json({ files });
     } catch (error) {
       console.error('Erro ao listar arquivos:', error);
-      res.status(500).json({ 
-        error: 'Erro interno do servidor ao listar arquivos' 
-      });
+      res.status(500).json({ error: 'Erro interno do servidor' });
     }
   }
 
   // Gerar URL de upload pré-assinada
   static async generateUploadUrl(req: Request, res: Response) {
     try {
-      const { fileName, contentType } = req.body;
+      const { objectName, contentType, expirySeconds } = req.body;
       
-      if (!fileName) {
-        return res.status(400).json({ error: 'Nome do arquivo é obrigatório' });
+      if (!objectName) {
+        return res.status(400).json({ error: 'Nome do objeto é obrigatório' });
       }
 
       const uploadUrl = await minioService.generateUploadUrl(
-        fileName,
-        3600, // 1 hora
+        objectName,
+        expirySeconds || 3600,
         contentType || 'image/*'
       );
 
       res.json({
-        success: true,
         uploadUrl,
-        publicUrl: minioService.getPublicUrl(fileName)
+        objectName,
+        expiresIn: expirySeconds || 3600,
       });
     } catch (error) {
       console.error('Erro ao gerar URL de upload:', error);
-      res.status(500).json({ 
-        error: 'Erro interno do servidor ao gerar URL de upload' 
-      });
+      res.status(500).json({ error: 'Erro interno do servidor' });
     }
   }
 } 
