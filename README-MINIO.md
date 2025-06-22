@@ -22,11 +22,12 @@ As seguintes dependências são necessárias:
 
 ```json
 {
-  "aws-sdk": "^2.1692.0",
+  "@aws-sdk/client-s3": "^3.832.0",
+  "@aws-sdk/s3-request-presigner": "^3.832.0",
   "multer": "^1.4.5-lts.1",
-  "uuid": "^9.0.0",
+  "uuid": "^11.1.0",
   "@types/multer": "^1.4.12",
-  "@types/uuid": "^9.0.0"
+  "@types/uuid": "^10.0.0"
 }
 ```
 

@@ -1,19 +1,21 @@
 // Script para testar a conexão com MinIO
 // Execute com: node test-minio.js
 
-const AWS = require('aws-sdk');
+const { S3Client, ListBucketsCommand, CreateBucketCommand, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 require('dotenv').config();
 
 async function testMinioConnection() {
   console.log('🔍 Testando conexão com MinIO...\n');
 
   // Configuração do MinIO
-  const s3 = new AWS.S3({
+  const s3Client = new S3Client({
     endpoint: process.env.MINIO_URL || 'https://shop-shop.9kbfkm.easypanel.host',
-    accessKeyId: process.env.MINIO_PUBLIC_KEY,
-    secretAccessKey: process.env.MINIO_SECRET_KEY,
-    s3ForcePathStyle: true,
-    signatureVersion: 'v4',
+    credentials: {
+      accessKeyId: process.env.MINIO_PUBLIC_KEY,
+      secretAccessKey: process.env.MINIO_SECRET_KEY,
+    },
+    region: process.env.MINIO_REGION || 'us-east-1',
+    forcePathStyle: true,
   });
 
   const bucketName = process.env.MINIO_BUCKET || 'shopping-images';
@@ -21,7 +23,8 @@ async function testMinioConnection() {
   try {
     // Teste 1: Listar buckets
     console.log('📋 Teste 1: Listando buckets...');
-    const buckets = await s3.listBuckets().promise();
+    const listBucketsCommand = new ListBucketsCommand({});
+    const buckets = await s3Client.send(listBucketsCommand);
     console.log('✅ Buckets encontrados:', buckets.Buckets.map(b => b.Name));
 
     // Teste 2: Verificar se o bucket do shopping existe
@@ -34,7 +37,8 @@ async function testMinioConnection() {
       console.log(`⚠️  Bucket '${bucketName}' não existe. Tentando criar...`);
       
       // Criar bucket se não existir
-      await s3.createBucket({ Bucket: bucketName }).promise();
+      const createBucketCommand = new CreateBucketCommand({ Bucket: bucketName });
+      await s3Client.send(createBucketCommand);
       console.log(`✅ Bucket '${bucketName}' criado com sucesso!`);
     }
 
@@ -43,22 +47,24 @@ async function testMinioConnection() {
     const testKey = 'test/test-file.txt';
     const testContent = 'Este é um arquivo de teste do Shopping API MinIO';
     
-    await s3.putObject({
+    const putObjectCommand = new PutObjectCommand({
       Bucket: bucketName,
       Key: testKey,
       Body: testContent,
       ContentType: 'text/plain'
-    }).promise();
+    });
     
+    await s3Client.send(putObjectCommand);
     console.log('✅ Upload de teste realizado com sucesso!');
 
     // Teste 4: Verificar se o arquivo foi enviado
     console.log('\n📋 Teste 4: Listando objetos no bucket...');
-    const objects = await s3.listObjectsV2({
+    const listObjectsCommand = new ListObjectsV2Command({
       Bucket: bucketName,
       Prefix: 'test/'
-    }).promise();
+    });
     
+    const objects = await s3Client.send(listObjectsCommand);
     console.log('✅ Objetos encontrados:', objects.Contents?.map(obj => obj.Key) || []);
 
     // Teste 5: Gerar URL pública
@@ -68,10 +74,12 @@ async function testMinioConnection() {
 
     // Teste 6: Cleanup - remover arquivo de teste
     console.log('\n🧹 Teste 6: Removendo arquivo de teste...');
-    await s3.deleteObject({
+    const deleteObjectCommand = new DeleteObjectCommand({
       Bucket: bucketName,
       Key: testKey
-    }).promise();
+    });
+    
+    await s3Client.send(deleteObjectCommand);
     console.log('✅ Arquivo de teste removido!');
 
     console.log('\n🎉 Todos os testes passaram! MinIO está configurado corretamente.');
