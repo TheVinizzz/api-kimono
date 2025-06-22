@@ -1,8 +1,21 @@
 import { Request, Response, NextFunction } from 'express';
-import { PrismaClient } from '@prisma/client';
 import { UAParser } from 'ua-parser-js';
 
-const prisma = new PrismaClient();
+// Lazy loading do Prisma para evitar problemas de inicialização
+let prisma: any = null;
+
+const getPrismaClient = async () => {
+  if (!prisma) {
+    try {
+      const { PrismaClient } = await import('@prisma/client');
+      prisma = new PrismaClient();
+    } catch (error) {
+      console.error('Erro ao inicializar Prisma:', error);
+      return null;
+    }
+  }
+  return prisma;
+};
 
 // Função para extrair o IP real do cliente, considerando proxies
 const getIpAddress = (req: Request): string => {
@@ -20,22 +33,40 @@ const getIpAddress = (req: Request): string => {
 const parseUserAgent = (userAgent: string | undefined) => {
   if (!userAgent) return null;
   
-  const parser = new UAParser(userAgent);
-  const browser = parser.getBrowser();
-  const device = parser.getDevice();
-  const os = parser.getOS();
-  
-  return {
-    browserName: browser.name || 'unknown',
-    deviceType: device.type || 'desktop',
-    operatingSystem: os.name || 'unknown',
-  };
+  try {
+    const parser = new UAParser(userAgent);
+    const browser = parser.getBrowser();
+    const device = parser.getDevice();
+    const os = parser.getOS();
+    
+    return {
+      browserName: browser.name || 'unknown',
+      deviceType: device.type || 'desktop',
+      operatingSystem: os.name || 'unknown',
+    };
+  } catch (error) {
+    console.error('Erro ao parsear User-Agent:', error);
+    return null;
+  }
 };
 
 export const trackPageVisit = async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    // Só rastrear requisições GET de páginas (ignorar assets, API, etc)
-    if (req.method === 'GET' && !req.path.startsWith('/api/') && !req.path.includes('.')) {
+  // Continuar imediatamente sem bloquear
+  next();
+  
+  // Executar analytics de forma assíncrona sem bloquear a resposta
+  setImmediate(async () => {
+    try {
+      // Só rastrear requisições GET de páginas (ignorar assets, API, etc)
+      if (req.method !== 'GET' || req.path.startsWith('/api/') || req.path.includes('.')) {
+        return;
+      }
+
+      const prismaClient = await getPrismaClient();
+      if (!prismaClient) {
+        return; // Falhar silenciosamente se não conseguir conectar
+      }
+      
       const userAgent = req.headers['user-agent'];
       const referrer = req.headers.referer || req.headers.referrer;
       const ipAddress = getIpAddress(req);
@@ -47,30 +78,31 @@ export const trackPageVisit = async (req: Request, res: Response, next: NextFunc
       // Extrair informações do dispositivo
       const deviceInfo = parseUserAgent(userAgent);
       
-      // Registrar a visita
-      await prisma.pageVisit.create({
-        data: {
-          url: req.protocol + '://' + req.get('host') + req.originalUrl,
-          path: req.path,
-          userAgent,
-          ipAddress,
-          referrer: referrer?.toString(),
-          userId,
-          sessionId,
-          deviceType: deviceInfo?.deviceType,
-          browserName: deviceInfo?.browserName,
-          operatingSystem: deviceInfo?.operatingSystem,
-          // Adicionar informações geográficas em uma implementação real
-          // Isso exigiria um serviço de geolocalização por IP
-          country: null,
-          city: null,
-        },
-      });
+      // Registrar a visita com timeout
+      await Promise.race([
+        prismaClient.pageVisit.create({
+          data: {
+            url: req.protocol + '://' + req.get('host') + req.originalUrl,
+            path: req.path,
+            userAgent,
+            ipAddress,
+            referrer: referrer?.toString(),
+            userId,
+            sessionId,
+            deviceType: deviceInfo?.deviceType,
+            browserName: deviceInfo?.browserName,
+            operatingSystem: deviceInfo?.operatingSystem,
+            country: null,
+            city: null,
+          },
+        }),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Analytics timeout')), 5000)
+        )
+      ]);
+    } catch (error) {
+      // Log do erro mas não afetar a aplicação
+      console.error('Erro ao rastrear visita:', error);
     }
-  } catch (error) {
-    // Log do erro mas continuar o fluxo normal da requisição
-    console.error('Erro ao rastrear visita:', error);
-  }
-  
-  next();
+  });
 }; 
