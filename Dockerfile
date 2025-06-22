@@ -9,50 +9,41 @@ WORKDIR /app
 # Instalar dependências necessárias para compilação
 RUN apk add --no-cache python3 make g++ git
 
-# Copiar arquivos de dependências
+# Copiar arquivos de dependências primeiro (cache layer)
 COPY package.json package-lock.json ./
 
-# Instalar dependências de produção apenas
-RUN npm ci --only=production --ignore-scripts && npm cache clean --force
+# Instalar todas as dependências (dev + prod) para build
+RUN npm ci --ignore-scripts && npm cache clean --force
 
-# Copiar o restante dos arquivos
+# Copiar código fonte
 COPY . .
 
-# Instalar dependências de dev temporariamente para build
-RUN npm install --only=dev --ignore-scripts
+# Instalar bcrypt compatível
+RUN npm uninstall bcrypt 2>/dev/null || true && npm install bcryptjs
 
-# Instalar bcrypt de maneira compatível
-RUN npm uninstall bcrypt && npm install bcryptjs
-
-# Gerar os artefatos do Prisma
+# Gerar Prisma client
 RUN npx prisma generate
 
-# Compilar TypeScript para JavaScript
-RUN npx tsc
+# Compilar TypeScript
+RUN npx tsc --skipLibCheck
 
-# Remover dependências de dev após o build
+# Remover dependências de desenvolvimento após build
 RUN npm prune --production
 
-# Remover arquivos de desenvolvimento
-RUN rm -rf src/ tsconfig.json *.ts && \
-    rm -rf node_modules/@types && \
-    rm -rf node_modules/typescript && \
-    rm -rf node_modules/ts-node
-
-# Criar usuário não-root por segurança
+# Criar usuário não-root
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 
-# Mudar ownership dos arquivos
+# Definir ownership
 RUN chown -R nodejs:nodejs /app
 USER nodejs
 
-# Expor a porta da aplicação
+# Expor porta
 EXPOSE 4000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:4000/health || exit 1
 
-# Comando para iniciar a aplicação
+# Iniciar aplicação
 CMD ["node", "dist/index.js"] 

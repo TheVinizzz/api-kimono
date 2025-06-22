@@ -1,5 +1,7 @@
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { Readable } from 'stream';
+import { S3Object } from '../types/aws.types';
 
 export class MinioService {
   private readonly s3Client: S3Client;
@@ -102,17 +104,15 @@ export class MinioService {
         throw new Error('Arquivo não encontrado ou vazio');
       }
 
-      // Converter stream para buffer
-      const chunks: Uint8Array[] = [];
-      const reader = response.Body.transformToWebStream().getReader();
+      // Converter stream para buffer usando método correto
+      const stream = response.Body as Readable;
+      const chunks: Buffer[] = [];
       
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-      }
-
-      return Buffer.concat(chunks);
+      return new Promise((resolve, reject) => {
+        stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+        stream.on('error', reject);
+        stream.on('end', () => resolve(Buffer.concat(chunks)));
+      });
     } catch (error: any) {
       console.error(
         `Erro ao baixar arquivo ${fileName}`,
@@ -174,7 +174,7 @@ export class MinioService {
       });
 
       const result = await this.s3Client.send(command);
-      return result.Contents?.map((obj: any) => obj.Key || '') || [];
+      return result.Contents?.map((obj: S3Object) => obj.Key || '') || [];
     } catch (error: any) {
       console.error(
         `Erro ao listar arquivos${folder ? ` da pasta ${folder}` : ''}`,

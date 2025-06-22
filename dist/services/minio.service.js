@@ -1,37 +1,4 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -43,16 +10,19 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MinioService = void 0;
-const AWS = __importStar(require("aws-sdk"));
+const client_s3_1 = require("@aws-sdk/client-s3");
+const s3_request_presigner_1 = require("@aws-sdk/s3-request-presigner");
 class MinioService {
     constructor() {
         this.bucketName = process.env.MINIO_BUCKET || 'shopping-images';
-        this.s3 = new AWS.S3({
+        this.s3Client = new client_s3_1.S3Client({
             endpoint: process.env.MINIO_URL,
-            accessKeyId: process.env.MINIO_PUBLIC_KEY,
-            secretAccessKey: process.env.MINIO_SECRET_KEY,
-            s3ForcePathStyle: true, // necessário para MinIO
-            signatureVersion: 'v4',
+            credentials: {
+                accessKeyId: process.env.MINIO_PUBLIC_KEY || '',
+                secretAccessKey: process.env.MINIO_SECRET_KEY || '',
+            },
+            region: 'us-east-1', // MinIO requer uma região
+            forcePathStyle: true, // necessário para MinIO
         });
     }
     getPublicUrl(objectName) {
@@ -80,15 +50,13 @@ class MinioService {
         return __awaiter(this, void 0, void 0, function* () {
             try {
                 const key = `${folder}/${fileName}`;
-                const params = {
+                const command = new client_s3_1.PutObjectCommand({
                     Bucket: this.bucketName,
                     Key: key,
                     Body: file,
-                };
-                if (contentType) {
-                    params.ContentType = contentType;
-                }
-                yield this.s3.putObject(params).promise();
+                    ContentType: contentType,
+                });
+                yield this.s3Client.send(command);
                 console.log(`Arquivo ${fileName} enviado com sucesso para a pasta ${folder} no bucket ${this.bucketName}`);
                 // Construir URL sempre com HTTPS
                 let baseUrl = process.env.MINIO_PUBLIC_URL || process.env.MINIO_URL;
@@ -114,13 +82,22 @@ class MinioService {
     downloadFile(fileName) {
         return __awaiter(this, void 0, void 0, function* () {
             try {
-                const data = yield this.s3
-                    .getObject({
+                const command = new client_s3_1.GetObjectCommand({
                     Bucket: this.bucketName,
                     Key: fileName,
-                })
-                    .promise();
-                return data.Body;
+                });
+                const response = yield this.s3Client.send(command);
+                if (!response.Body) {
+                    throw new Error('Arquivo não encontrado ou vazio');
+                }
+                // Converter stream para buffer usando método correto
+                const stream = response.Body;
+                const chunks = [];
+                return new Promise((resolve, reject) => {
+                    stream.on('data', (chunk) => chunks.push(chunk));
+                    stream.on('error', reject);
+                    stream.on('end', () => resolve(Buffer.concat(chunks)));
+                });
             }
             catch (error) {
                 console.error(`Erro ao baixar arquivo ${fileName}`, (error === null || error === void 0 ? void 0 : error.stack) || 'Sem stack trace');
@@ -131,12 +108,11 @@ class MinioService {
     deleteFile(fileName) {
         return __awaiter(this, void 0, void 0, function* () {
             try {
-                yield this.s3
-                    .deleteObject({
+                const command = new client_s3_1.DeleteObjectCommand({
                     Bucket: this.bucketName,
                     Key: fileName,
-                })
-                    .promise();
+                });
+                yield this.s3Client.send(command);
                 console.log(`Arquivo ${fileName} removido com sucesso do bucket ${this.bucketName}`);
             }
             catch (error) {
@@ -148,13 +124,14 @@ class MinioService {
     generateUploadUrl(objectName_1) {
         return __awaiter(this, arguments, void 0, function* (objectName, expirySeconds = 3600, contentType = 'image/*') {
             try {
-                const params = {
+                const command = new client_s3_1.PutObjectCommand({
                     Bucket: this.bucketName,
                     Key: objectName,
-                    Expires: expirySeconds,
                     ContentType: contentType,
-                };
-                return yield this.s3.getSignedUrlPromise('putObject', params);
+                });
+                return yield (0, s3_request_presigner_1.getSignedUrl)(this.s3Client, command, {
+                    expiresIn: expirySeconds
+                });
             }
             catch (error) {
                 console.error(`Erro ao gerar URL de upload: ${(error === null || error === void 0 ? void 0 : error.message) || 'Erro desconhecido'}`, (error === null || error === void 0 ? void 0 : error.stack) || 'Sem stack trace');
@@ -166,12 +143,12 @@ class MinioService {
         return __awaiter(this, void 0, void 0, function* () {
             var _a;
             try {
-                const params = {
+                const command = new client_s3_1.ListObjectsV2Command({
                     Bucket: this.bucketName,
                     Prefix: folder ? `${folder}/` : undefined,
-                };
-                const result = yield this.s3.listObjectsV2(params).promise();
-                return ((_a = result.Contents) === null || _a === void 0 ? void 0 : _a.map(obj => obj.Key || '')) || [];
+                });
+                const result = yield this.s3Client.send(command);
+                return ((_a = result.Contents) === null || _a === void 0 ? void 0 : _a.map((obj) => obj.Key || '')) || [];
             }
             catch (error) {
                 console.error(`Erro ao listar arquivos${folder ? ` da pasta ${folder}` : ''}`, (error === null || error === void 0 ? void 0 : error.stack) || 'Sem stack trace');

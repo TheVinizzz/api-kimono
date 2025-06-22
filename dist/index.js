@@ -22,6 +22,7 @@ const product_images_routes_1 = __importDefault(require("./routes/product-images
 const analytics_middleware_1 = require("./middleware/analytics.middleware");
 // Inicializar o app
 const app = (0, express_1.default)();
+let server;
 // Configuração CORS unificada e permissiva
 app.use((0, cors_1.default)({
     origin: '*', // Permitir qualquer origem
@@ -34,7 +35,8 @@ app.use((0, cors_1.default)({
     optionsSuccessStatus: 200
 }));
 // Outros middlewares
-app.use(express_1.default.json());
+app.use(express_1.default.json({ limit: '10mb' }));
+app.use(express_1.default.urlencoded({ extended: true, limit: '10mb' }));
 app.use((0, cookie_parser_1.default)());
 // Logging de requisições
 app.use((req, _res, next) => {
@@ -56,7 +58,12 @@ app.use('/api/upload', upload_routes_1.default);
 app.use('/api/product-images', product_images_routes_1.default);
 // Rota de saúde para verificação
 app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.json({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        memory: process.memoryUsage(),
+        uptime: process.uptime()
+    });
 });
 // Middleware para rotas não encontradas
 app.use((_req, res) => {
@@ -68,9 +75,47 @@ const errorHandler = (err, _req, res, _next) => {
     res.status(500).json({ error: 'Erro interno do servidor' });
 };
 app.use(errorHandler);
+// Função para graceful shutdown
+const gracefulShutdown = (signal) => {
+    console.log(`Recebido sinal ${signal}. Iniciando graceful shutdown...`);
+    if (server) {
+        server.close((err) => {
+            if (err) {
+                console.error('Erro durante o shutdown:', err);
+                process.exit(1);
+            }
+            console.log('Servidor fechado com sucesso');
+            process.exit(0);
+        });
+        // Forçar shutdown após 30 segundos
+        setTimeout(() => {
+            console.error('Forçando shutdown após timeout');
+            process.exit(1);
+        }, 30000);
+    }
+    else {
+        process.exit(0);
+    }
+};
+// Tratar sinais de terminação
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+// Tratar exceções não capturadas
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+    gracefulShutdown('uncaughtException');
+});
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    gracefulShutdown('unhandledRejection');
+});
 // Iniciar o servidor
 const PORT = config_1.default.port;
-app.listen(PORT, () => {
+server = app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
     console.log(`URL da API: http://localhost:${PORT}`);
+    console.log(`Memória inicial: ${JSON.stringify(process.memoryUsage())}`);
 });
+// Configurar timeout para keep-alive
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
