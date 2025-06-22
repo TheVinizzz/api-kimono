@@ -12,20 +12,21 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.UploadController = exports.uploadMiddleware = void 0;
+exports.UploadController = exports.uploadProductImages = exports.uploadImages = exports.uploadImage = exports.uploadMultiple = exports.uploadSingle = void 0;
 const minio_service_1 = require("../services/minio.service");
 const uuid_1 = require("uuid");
 const multer_1 = __importDefault(require("multer"));
 const path_1 = __importDefault(require("path"));
 const minioService = new minio_service_1.MinioService();
-// Configuração do multer para armazenar arquivos em memória
+// Configuração do multer para armazenar arquivos na memória
+const storage = multer_1.default.memoryStorage();
 const upload = (0, multer_1.default)({
-    storage: multer_1.default.memoryStorage(),
+    storage: storage,
     limits: {
-        fileSize: 5 * 1024 * 1024, // 5MB
+        fileSize: 10 * 1024 * 1024, // 10MB
     },
-    fileFilter: (req, file, cb) => {
-        // Permitir apenas imagens
+    fileFilter: (_req, file, cb) => {
+        // Aceitar apenas imagens
         if (file.mimetype.startsWith('image/')) {
             cb(null, true);
         }
@@ -34,7 +35,92 @@ const upload = (0, multer_1.default)({
         }
     },
 });
-exports.uploadMiddleware = upload;
+exports.uploadSingle = upload.single('image');
+exports.uploadMultiple = upload.array('images', 10);
+const uploadImage = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+        }
+        const file = req.file;
+        const fileName = `${(0, uuid_1.v4)()}-${file.originalname}`;
+        const folder = 'uploads';
+        const fileUrl = yield minioService.uploadFile(folder, fileName, file.buffer, file.mimetype);
+        res.json({
+            message: 'Arquivo enviado com sucesso',
+            fileUrl,
+            fileName,
+        });
+    }
+    catch (error) {
+        console.error('Erro no upload:', error);
+        res.status(500).json({ error: 'Erro interno do servidor' });
+    }
+});
+exports.uploadImage = uploadImage;
+const uploadImages = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        if (!req.files || !Array.isArray(req.files) || req.files.length === 0) {
+            return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+        }
+        const files = req.files;
+        const uploadPromises = files.map((file) => __awaiter(void 0, void 0, void 0, function* () {
+            const fileName = `${(0, uuid_1.v4)()}-${file.originalname}`;
+            const folder = 'uploads';
+            const fileUrl = yield minioService.uploadFile(folder, fileName, file.buffer, file.mimetype);
+            return {
+                fileName,
+                fileUrl,
+                originalName: file.originalname,
+                size: file.size,
+            };
+        }));
+        const uploadedFiles = yield Promise.all(uploadPromises);
+        res.json({
+            message: 'Arquivos enviados com sucesso',
+            files: uploadedFiles,
+        });
+    }
+    catch (error) {
+        console.error('Erro no upload múltiplo:', error);
+        res.status(500).json({ error: 'Erro interno do servidor' });
+    }
+});
+exports.uploadImages = uploadImages;
+const uploadProductImages = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        if (!req.files || !Array.isArray(req.files) || req.files.length === 0) {
+            return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+        }
+        const files = req.files;
+        const productId = req.body.productId;
+        if (!productId) {
+            return res.status(400).json({ error: 'ID do produto é obrigatório' });
+        }
+        const uploadPromises = files.map((file, index) => __awaiter(void 0, void 0, void 0, function* () {
+            const fileName = `product-${productId}-${(0, uuid_1.v4)()}-${file.originalname}`;
+            const folder = 'products';
+            const fileUrl = yield minioService.uploadFile(folder, fileName, file.buffer, file.mimetype);
+            return {
+                fileName,
+                fileUrl,
+                originalName: file.originalname,
+                size: file.size,
+                order: index,
+            };
+        }));
+        const uploadedFiles = yield Promise.all(uploadPromises);
+        res.json({
+            message: 'Imagens do produto enviadas com sucesso',
+            images: uploadedFiles,
+        });
+    }
+    catch (error) {
+        console.error('Erro no upload de imagens do produto:', error);
+        res.status(500).json({ error: 'Erro interno do servidor' });
+    }
+});
+exports.uploadProductImages = uploadProductImages;
 class UploadController {
     // Upload de imagem de produto
     static uploadProductImage(req, res) {

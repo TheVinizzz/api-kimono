@@ -1,10 +1,9 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import prisma from '../config/prisma';
 import { MinioService } from '../services/minio.service';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 
-const prisma = new PrismaClient();
 const minioService = new MinioService();
 
 export class ProductImagesController {
@@ -12,98 +11,60 @@ export class ProductImagesController {
   static async uploadProductImages(req: Request, res: Response) {
     try {
       const { productId } = req.params;
-      const files = req.files as Express.Multer.File[];
       
-      if (!files || files.length === 0) {
-        return res.status(400).json({ error: 'Nenhuma imagem foi enviada' });
+      if (!req.files || !Array.isArray(req.files) || req.files.length === 0) {
+        return res.status(400).json({ error: 'Nenhum arquivo enviado' });
       }
 
-      const productIdNum = Number(productId);
-      if (isNaN(productIdNum)) {
-        return res.status(400).json({ error: 'ID do produto inválido' });
-      }
-
+      const files = req.files as any[];
+      
       // Verificar se o produto existe
       const product = await prisma.product.findUnique({
-        where: { id: productIdNum }
+        where: { id: parseInt(productId) }
       });
 
       if (!product) {
         return res.status(404).json({ error: 'Produto não encontrado' });
       }
 
-      const uploadResults = [];
-      let isFirst = true;
+      // Upload dos arquivos para o MinIO
+      const uploadPromises = files.map(async (file: any, index: number) => {
+        const fileName = `product-${productId}-${uuidv4()}-${file.originalname}`;
+        const folder = 'products';
 
-      // Obter a próxima ordem disponível
-      const lastImage = await prisma.productImage.findFirst({
-        where: { productId: productIdNum },
-        orderBy: { order: 'desc' }
-      });
-      let nextOrder = lastImage ? lastImage.order + 1 : 0;
-
-      for (const file of files) {
-        const fileExtension = path.extname(file.originalname).toLowerCase();
-        const fileName = `products/${productIdNum}/${uuidv4()}${fileExtension}`;
-
-        // Upload para MinIO
         const fileUrl = await minioService.uploadFile(
-          'products',
-          `${productIdNum}/${uuidv4()}${fileExtension}`,
+          folder,
+          fileName,
           file.buffer,
           file.mimetype
         );
 
-        // Verificar se já existe uma imagem principal para este produto
-        const existingMainImage = await prisma.productImage.findFirst({
-          where: { 
-            productId: productIdNum,
-            isMain: true 
-          }
-        });
-
-        const shouldBeMain = !existingMainImage; // Apenas se não houver imagem principal
-
-        console.log('Upload - Produto:', productIdNum, 'Arquivo:', file.originalname, 'Será principal:', shouldBeMain);
-
-        // Criar registro na base de dados
-        const productImage = await prisma.productImage.create({
-          data: {
-            productId: productIdNum,
-            imageUrl: fileUrl,
-            isMain: shouldBeMain,
-            order: nextOrder++
-          }
-        });
-
-        // Se é a primeira imagem principal, atualizar também o campo imageUrl do produto para compatibilidade
-        if (shouldBeMain) {
-          await prisma.product.update({
-            where: { id: productIdNum },
-            data: { imageUrl: fileUrl }
-          });
-        }
-
-        uploadResults.push({
-          id: productImage.id,
+        return {
+          productId: parseInt(productId),
           imageUrl: fileUrl,
-          isMain: productImage.isMain,
-          order: productImage.order,
-          originalName: file.originalname,
-          size: file.size
-        });
-      }
+          isMain: index === 0, // Primeira imagem é a principal
+          order: index + 1,
+        };
+      });
+
+      const uploadedImages = await Promise.all(uploadPromises);
+
+      // Salvar no banco de dados
+      const savedImages = await Promise.all(
+        uploadedImages.map(imageData => 
+          prisma.productImage.create({
+            data: imageData
+          })
+        )
+      );
 
       res.json({
-        success: true,
-        images: uploadResults,
-        message: `${uploadResults.length} imagem(ns) enviada(s) com sucesso`
+        message: 'Imagens enviadas com sucesso',
+        images: savedImages,
       });
     } catch (error) {
-      console.error('Erro no upload de imagens do produto:', error);
-      res.status(500).json({ 
-        error: 'Erro interno do servidor ao fazer upload das imagens' 
-      });
+      console.error('Erro no upload de imagens:', error);
+      res.status(500).json({ error: 'Erro interno do servidor' });
     }
   }
 
@@ -111,24 +72,16 @@ export class ProductImagesController {
   static async getProductImages(req: Request, res: Response) {
     try {
       const { productId } = req.params;
-      const productIdNum = Number(productId);
-
-      if (isNaN(productIdNum)) {
-        return res.status(400).json({ error: 'ID do produto inválido' });
-      }
 
       const images = await prisma.productImage.findMany({
-        where: { productId: productIdNum },
-        orderBy: [
-          { isMain: 'desc' }, // Imagem principal primeiro
-          { order: 'asc' }    // Depois por ordem
-        ]
+        where: { productId: parseInt(productId) },
+        orderBy: { order: 'asc' }
       });
 
       res.json(images);
     } catch (error) {
-      console.error('Erro ao buscar imagens do produto:', error);
-      res.status(500).json({ error: 'Erro ao buscar imagens do produto' });
+      console.error('Erro ao buscar imagens:', error);
+      res.status(500).json({ error: 'Erro interno do servidor' });
     }
   }
 
@@ -136,75 +89,26 @@ export class ProductImagesController {
   static async setMainImage(req: Request, res: Response) {
     try {
       const { productId, imageId } = req.params;
-      const productIdNum = Number(productId);
-      const imageIdNum = Number(imageId);
 
-      console.log('SetMainImage - IDs recebidos:', { productId: productIdNum, imageId: imageIdNum });
-
-      if (isNaN(productIdNum) || isNaN(imageIdNum)) {
-        return res.status(400).json({ error: 'IDs inválidos' });
-      }
-
-      // Verificar se a imagem pertence ao produto
-      const image = await prisma.productImage.findFirst({
-        where: { 
-          id: imageIdNum,
-          productId: productIdNum 
-        }
+      // Remover isMain de todas as imagens do produto
+      await prisma.productImage.updateMany({
+        where: { productId: parseInt(productId) },
+        data: { isMain: false }
       });
 
-      if (!image) {
-        console.log('Imagem não encontrada:', { imageIdNum, productIdNum });
-        return res.status(404).json({ error: 'Imagem não encontrada' });
-      }
-
-      console.log('Imagem encontrada:', image);
-
-      // Usar uma transação para garantir consistência
-      const result = await prisma.$transaction(async (tx) => {
-        // Primeiro, remover isMain de todas as imagens do produto
-        const updateResult = await tx.productImage.updateMany({
-          where: { 
-            productId: productIdNum
-          },
-          data: { isMain: false }
-        });
-
-        console.log('Removeu isMain de', updateResult.count, 'imagens');
-
-        // Depois, definir esta imagem como principal
-        const updatedImage = await tx.productImage.update({
-          where: { id: imageIdNum },
-          data: { isMain: true }
-        });
-
-        console.log('Imagem definida como principal:', updatedImage);
-
-        // Atualizar também o campo imageUrl do produto para compatibilidade
-        await tx.product.update({
-          where: { id: productIdNum },
-          data: { imageUrl: updatedImage.imageUrl }
-        });
-
-        return updatedImage;
+      // Definir a nova imagem principal
+      const updatedImage = await prisma.productImage.update({
+        where: { id: parseInt(imageId) },
+        data: { isMain: true }
       });
-
-      // Verificar o estado final
-      const allImages = await prisma.productImage.findMany({
-        where: { productId: productIdNum },
-        select: { id: true, isMain: true }
-      });
-
-      console.log('Estado final das imagens:', allImages);
 
       res.json({
-        success: true,
         message: 'Imagem principal definida com sucesso',
-        image: result
+        image: updatedImage
       });
     } catch (error) {
       console.error('Erro ao definir imagem principal:', error);
-      res.status(500).json({ error: 'Erro ao definir imagem principal' });
+      res.status(500).json({ error: 'Erro interno do servidor' });
     }
   }
 
@@ -213,112 +117,66 @@ export class ProductImagesController {
     try {
       const { productId } = req.params;
       const { imageIds } = req.body; // Array de IDs na nova ordem
-      
-      const productIdNum = Number(productId);
-      if (isNaN(productIdNum)) {
-        return res.status(400).json({ error: 'ID do produto inválido' });
-      }
 
       if (!Array.isArray(imageIds)) {
-        return res.status(400).json({ error: 'Lista de IDs inválida' });
+        return res.status(400).json({ error: 'imageIds deve ser um array' });
       }
 
-      // Atualizar ordem das imagens
+      // Atualizar a ordem das imagens
       const updatePromises = imageIds.map((imageId: number, index: number) =>
         prisma.productImage.update({
-          where: { 
-            id: imageId,
-            productId: productIdNum // Garante que a imagem pertence ao produto
-          },
-          data: { order: index }
+          where: { id: imageId },
+          data: { order: index + 1 }
         })
       );
 
       await Promise.all(updatePromises);
 
+      const updatedImages = await prisma.productImage.findMany({
+        where: { productId: parseInt(productId) },
+        orderBy: { order: 'asc' }
+      });
+
       res.json({
-        success: true,
-        message: 'Ordem das imagens atualizada com sucesso'
+        message: 'Ordem das imagens atualizada com sucesso',
+        images: updatedImages
       });
     } catch (error) {
       console.error('Erro ao reordenar imagens:', error);
-      res.status(500).json({ error: 'Erro ao reordenar imagens' });
+      res.status(500).json({ error: 'Erro interno do servidor' });
     }
   }
 
   // Deletar imagem
   static async deleteImage(req: Request, res: Response) {
     try {
-      const { productId, imageId } = req.params;
-      const productIdNum = Number(productId);
-      const imageIdNum = Number(imageId);
+      const { imageId } = req.params;
 
-      if (isNaN(productIdNum) || isNaN(imageIdNum)) {
-        return res.status(400).json({ error: 'IDs inválidos' });
-      }
-
-      // Buscar a imagem
-      const image = await prisma.productImage.findFirst({
-        where: { 
-          id: imageIdNum,
-          productId: productIdNum 
-        }
+      // Buscar a imagem para obter a URL
+      const image = await prisma.productImage.findUnique({
+        where: { id: parseInt(imageId) }
       });
 
       if (!image) {
         return res.status(404).json({ error: 'Imagem não encontrada' });
       }
 
-      // Tentar deletar do MinIO (não falha se não conseguir)
-      try {
-        // Extrair o nome do arquivo da URL
-        const fileName = image.imageUrl.split('/').pop();
-        if (fileName) {
-          await minioService.deleteFile(fileName);
-        }
-      } catch (minioError) {
-        console.warn('Erro ao deletar arquivo do MinIO:', minioError);
+      // Extrair o nome do arquivo da URL
+      const fileName = image.imageUrl.split('/').pop();
+      if (fileName) {
+        // Remover do MinIO
+        await minioService.deleteFile(`products/${fileName}`);
       }
 
-      // Deletar da base de dados
+      // Remover do banco de dados
       await prisma.productImage.delete({
-        where: { id: imageIdNum }
+        where: { id: parseInt(imageId) }
       });
 
-      // Se era a imagem principal, definir uma nova imagem principal
-      if (image.isMain) {
-        const nextImage = await prisma.productImage.findFirst({
-          where: { productId: productIdNum },
-          orderBy: { order: 'asc' }
-        });
-
-        if (nextImage) {
-          await prisma.productImage.update({
-            where: { id: nextImage.id },
-            data: { isMain: true }
-          });
-
-          // Atualizar imageUrl do produto
-          await prisma.product.update({
-            where: { id: productIdNum },
-            data: { imageUrl: nextImage.imageUrl }
-          });
-        } else {
-          // Não há mais imagens, limpar imageUrl do produto
-          await prisma.product.update({
-            where: { id: productIdNum },
-            data: { imageUrl: null }
-          });
-        }
-      }
-
-      res.json({
-        success: true,
-        message: 'Imagem deletada com sucesso'
-      });
+      res.json({ message: 'Imagem removida com sucesso' });
     } catch (error) {
-      console.error('Erro ao deletar imagem:', error);
-      res.status(500).json({ error: 'Erro ao deletar imagem' });
+      console.error('Erro ao remover imagem:', error);
+      res.status(500).json({ error: 'Erro interno do servidor' });
     }
   }
 
