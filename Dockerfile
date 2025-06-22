@@ -2,6 +2,9 @@ FROM node:18-alpine
 
 WORKDIR /app
 
+# Definir NODE_ENV como production
+ENV NODE_ENV=production
+
 # Instalar dependências do sistema
 RUN apk add --no-cache python3 make g++
 
@@ -35,8 +38,11 @@ RUN chown -R nodejs:nodejs /app
 
 USER nodejs
 
+# Mudar para o diretório dist
+WORKDIR /app
+
 # Expor porta
 EXPOSE 4000
 
-# Comando de inicialização
-CMD ["npm", "start"] 
+# Comando de inicialização direto do arquivo compilado
+CMD ["node", "dist/index.js"] 

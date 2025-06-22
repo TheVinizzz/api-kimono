@@ -16,9 +16,6 @@ import analyticsRoutes from './routes/analytics.routes';
 import uploadRoutes from './routes/upload.routes';
 import productImagesRoutes from './routes/product-images.routes';
 
-// Importar middleware de analytics
-import { trackPageVisit } from './middleware/analytics.middleware';
-
 // Inicializar o app
 const app = express();
 let server: Server;
@@ -46,10 +43,39 @@ app.use((req, _res, next) => {
   next();
 });
 
-// Middleware de analytics para rastrear visitas
-app.use(trackPageVisit);
+// Middleware de analytics para rastrear visitas (com tratamento de erro)
+app.use(async (req, res, next) => {
+  try {
+    // Importar dynamicamente para evitar problemas de inicialização
+    const { trackPageVisit } = await import('./middleware/analytics.middleware');
+    await trackPageVisit(req, res, next);
+  } catch (error) {
+    console.warn('Erro no analytics middleware:', error);
+    next(); // Continuar mesmo se analytics falhar
+  }
+});
 
-// Rotas - todas usarão o CORS configurado globalmente acima
+// Rotas de saúde primeiro (para health checks)
+app.get('/health', (_req, res) => {
+  res.status(200).json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    memory: process.memoryUsage(),
+    uptime: process.uptime(),
+    env: process.env.NODE_ENV || 'development'
+  });
+});
+
+// Rota raiz também para health check
+app.get('/', (_req, res) => {
+  res.status(200).json({ 
+    message: 'Kimono API is running',
+    status: 'ok',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Rotas da API
 app.use('/api/auth', authRoutes);
 app.use('/api/categories', categoriesRoutes);
 app.use('/api/products', productsRoutes);
@@ -60,16 +86,6 @@ app.use('/api/payment', paymentRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/product-images', productImagesRoutes);
-
-// Rota de saúde para verificação
-app.get('/health', (_req, res) => {
-  res.json({ 
-    status: 'ok', 
-    timestamp: new Date().toISOString(),
-    memory: process.memoryUsage(),
-    uptime: process.uptime()
-  });
-});
 
 // Middleware para rotas não encontradas
 app.use((_req, res) => {
@@ -115,20 +131,31 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 // Tratar exceções não capturadas
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
-  gracefulShutdown('uncaughtException');
+  // Em produção, não fazer graceful shutdown imediatamente
+  if (process.env.NODE_ENV === 'production') {
+    console.error('Continuando execução em produção...');
+  } else {
+    gracefulShutdown('uncaughtException');
+  }
 });
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  gracefulShutdown('unhandledRejection');
+  // Em produção, não fazer graceful shutdown imediatamente
+  if (process.env.NODE_ENV === 'production') {
+    console.error('Continuando execução em produção...');
+  } else {
+    gracefulShutdown('unhandledRejection');
+  }
 });
 
 // Iniciar o servidor
-const PORT = config.port;
-server = app.listen(PORT, () => {
+const PORT = Number(process.env.PORT) || Number(config.port) || 4000;
+server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Servidor rodando na porta ${PORT}`);
   console.log(`URL da API: http://localhost:${PORT}`);
   console.log(`Memória inicial: ${JSON.stringify(process.memoryUsage())}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
 // Configurar timeout para keep-alive
