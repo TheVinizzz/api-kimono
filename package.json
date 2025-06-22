@@ -11,12 +11,14 @@
     "build:production": "npm ci --only=production && npm run build",
     "verify": "node scripts/verify-build.js",
     "build:verify": "npm run build && npm run verify",
+    "docker:build": "npm run build && docker build -t shopping-api .",
+    "docker:build-simple": "npm run build && docker build -f Dockerfile.simple -t shopping-api .",
+    "docker:run": "docker run -p 4000:4000 shopping-api",
+    "predeploy": "npm run build:verify",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "prisma:seed": "ts-node prisma/seed.ts",
-    "docker:build": "docker build -t shopping-api .",
-    "docker:run": "docker run -p 4000:4000 shopping-api"
+    "prisma:seed": "ts-node prisma/seed.ts"
   },
   "keywords": [],
   "author": "",

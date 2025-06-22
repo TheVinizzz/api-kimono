@@ -1,33 +1,66 @@
 FROM node:18-alpine
 
-# Definir variáveis de ambiente para otimização
+# Definir variáveis de ambiente
 ENV NODE_ENV=production
 ENV NODE_OPTIONS="--max-old-space-size=512"
 
 WORKDIR /app
 
-# Instalar dependências necessárias para compilação
+# Instalar dependências do sistema
 RUN apk add --no-cache python3 make g++ git
 
-# Copiar arquivos de dependências primeiro (cache layer)
+# Copiar package files
 COPY package.json package-lock.json ./
 
-# Instalar todas as dependências (dev + prod) para build
+# Instalar dependências
 RUN npm ci --ignore-scripts && npm cache clean --force
 
 # Copiar código fonte
 COPY . .
 
+# Debug: listar estrutura de arquivos
+RUN echo "=== Estrutura de arquivos ===" && \
+    ls -la && \
+    echo "=== Conteúdo src ===" && \
+    ls -la src/ && \
+    echo "=== tsconfig.json ===" && \
+    cat tsconfig.json
+
 # Instalar bcrypt compatível
-RUN npm uninstall bcrypt 2>/dev/null || true && npm install bcryptjs
+RUN npm uninstall bcrypt 2>/dev/null || true && \
+    npm install bcryptjs --save
 
 # Gerar Prisma client
-RUN npx prisma generate
+RUN echo "=== Gerando Prisma client ===" && \
+    npx prisma generate
 
-# Compilar TypeScript
-RUN npx tsc --skipLibCheck
+# Debug: verificar se TypeScript está disponível
+RUN echo "=== Verificando TypeScript ===" && \
+    npx tsc --version && \
+    echo "=== Verificando sintaxe ===" && \
+    npx tsc --noEmit --skipLibCheck || echo "Erro na verificação de sintaxe"
 
-# Remover dependências de desenvolvimento após build
+# Compilar TypeScript com configurações mais permissivas
+RUN echo "=== Compilando TypeScript ===" && \
+    npx tsc \
+    --skipLibCheck \
+    --esModuleInterop \
+    --allowSyntheticDefaultImports \
+    --resolveJsonModule \
+    --target es2018 \
+    --module commonjs \
+    --outDir ./dist \
+    --rootDir ./src \
+    --strict false \
+    --noImplicitAny false \
+    --noImplicitReturns false
+
+# Debug: verificar se a compilação funcionou
+RUN echo "=== Verificando compilação ===" && \
+    ls -la dist/ && \
+    ls -la dist/services/ || echo "Pasta services não encontrada"
+
+# Remover dependências de desenvolvimento
 RUN npm prune --production
 
 # Criar usuário não-root

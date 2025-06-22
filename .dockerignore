@@ -13,7 +13,6 @@ coverage
 .vscode
 .idea
 *.log
-dist
 .DS_Store
 Thumbs.db
 .cache
@@ -32,4 +31,6 @@ Dockerfile.dev
 test/
 tests/
 spec/
-__tests__/ 
+__tests__/
+# Não ignorar dist para Dockerfile.simple
+# dist 

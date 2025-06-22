@@ -17,6 +17,24 @@
 - Tipos corretos para AWS SDK v3
 - Build funcionando no Docker
 
+## Opções de Deploy
+
+### Opção 1: Dockerfile (Compilação no Container)
+```bash
+# Use o Dockerfile principal - compila no container
+# Melhor para CI/CD automático
+```
+
+### Opção 2: Dockerfile.simple (Compilação Local)
+```bash
+# 1. Compile localmente primeiro
+npm run build:verify
+
+# 2. Use o Dockerfile.simple no Easypanel
+# Renomeie Dockerfile.simple para Dockerfile
+# ou configure o Easypanel para usar Dockerfile.simple
+```
+
 ## Configurações do Container
 
 ### Variáveis de Ambiente Necessárias
@@ -57,14 +75,28 @@ npm run build:verify
 
 # Build limpo
 npm run build:clean
+
+# Deploy completo
+./scripts/deploy.sh
 ```
 
 ## Troubleshooting
 
-### Se o build falhar:
-1. Verificar se todas as dependências estão instaladas
-2. Rodar `npm run build:verify` localmente
-3. Verificar logs do Docker build
+### Se o build falhar no Docker:
+1. **Use Dockerfile.simple**: Compile localmente e use o Dockerfile.simple
+2. **Verificar logs**: O Dockerfile principal tem debug detalhado
+3. **Build local**: Rode `npm run build:verify` para testar
+
+### Passos para usar Dockerfile.simple:
+```bash
+# 1. Compile localmente
+npm run build:verify
+
+# 2. No Easypanel, renomeie o arquivo:
+# Dockerfile.simple → Dockerfile
+
+# 3. Ou configure o Easypanel para usar Dockerfile.simple
+```
 
 ### Se o container morrer com SIGTERM:
 1. Verificar logs do health check
@@ -77,4 +109,15 @@ O servidor agora logga:
 - Sinais de terminação recebidos
 - Informações de memória no startup
 - Status do graceful shutdown
-- Health check detalhado 
+- Health check detalhado
+
+## Recomendação
+
+**Para resolver o erro atual no Easypanel:**
+
+1. **Compile localmente**: `npm run build:verify`
+2. **Commit os arquivos compilados** (pasta dist/)
+3. **Renomeie Dockerfile.simple para Dockerfile** no seu repositório
+4. **Faça o deploy** no Easypanel
+
+Isso deve resolver o problema de compilação no container. 
