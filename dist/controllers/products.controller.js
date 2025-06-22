@@ -100,7 +100,15 @@ const getFilteredProducts = (req, res) => __awaiter(void 0, void 0, void 0, func
         const products = yield prisma.product.findMany({
             where,
             orderBy,
-            include: { category: true }
+            include: {
+                category: true,
+                images: {
+                    orderBy: [
+                        { isMain: 'desc' },
+                        { order: 'asc' }
+                    ]
+                }
+            }
         });
         // Filtrar por percentual de desconto (se necessário)
         let filteredProducts = [...products];
@@ -136,7 +144,15 @@ exports.getFilteredProducts = getFilteredProducts;
 const getAllProducts = (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const products = yield prisma.product.findMany({
-            include: { category: true },
+            include: {
+                category: true,
+                images: {
+                    orderBy: [
+                        { isMain: 'desc' },
+                        { order: 'asc' }
+                    ]
+                }
+            },
         });
         return res.json(products);
     }
@@ -156,7 +172,15 @@ const getProductById = (req, res) => __awaiter(void 0, void 0, void 0, function*
         }
         const product = yield prisma.product.findUnique({
             where: { id: productId },
-            include: { category: true },
+            include: {
+                category: true,
+                images: {
+                    orderBy: [
+                        { isMain: 'desc' },
+                        { order: 'asc' }
+                    ]
+                }
+            },
         });
         if (!product) {
             return res.status(404).json({ error: 'Produto não encontrado' });
@@ -197,7 +221,15 @@ const createProduct = (req, res) => __awaiter(void 0, void 0, void 0, function* 
                 imageUrl,
                 categoryId,
             },
-            include: { category: true },
+            include: {
+                category: true,
+                images: {
+                    orderBy: [
+                        { isMain: 'desc' },
+                        { order: 'asc' }
+                    ]
+                }
+            },
         });
         return res.status(201).json(newProduct);
     }
@@ -242,7 +274,15 @@ const updateProduct = (req, res) => __awaiter(void 0, void 0, void 0, function* 
         const updatedProduct = yield prisma.product.update({
             where: { id: productId },
             data: updateData,
-            include: { category: true },
+            include: {
+                category: true,
+                images: {
+                    orderBy: [
+                        { isMain: 'desc' },
+                        { order: 'asc' }
+                    ]
+                }
+            },
         });
         return res.json(updatedProduct);
     }
@@ -346,3 +386,5 @@ const deleteProduct = (req, res) => __awaiter(void 0, void 0, void 0, function* 
     }
 });
 exports.deleteProduct = deleteProduct;
+// Este arquivo é apenas um exemplo de integração
+// Para usar, adapte seus controllers existentes conforme necessário 

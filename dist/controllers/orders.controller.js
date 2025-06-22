@@ -9,7 +9,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.addShipmentUpdate = exports.updateTrackingInfo = exports.getOrderTracking = exports.adminUpdateOrderStatus = exports.updateOrderStatus = exports.createOrder = exports.getOrderById = exports.getUserOrders = exports.getAllOrders = void 0;
+exports.createGuestOrder = exports.addShipmentUpdate = exports.updateTrackingInfo = exports.getOrderTracking = exports.adminUpdateOrderStatus = exports.updateOrderStatus = exports.createOrder = exports.getOrderById = exports.getUserOrders = exports.getAllOrders = void 0;
 const client_1 = require("@prisma/client");
 const zod_1 = require("zod");
 const prisma = new client_1.PrismaClient();
@@ -46,6 +46,26 @@ const trackingUpdateSchema = zod_1.z.object({
     departureDate: zod_1.z.string().optional().transform(val => val ? new Date(val) : undefined),
     currentLocation: zod_1.z.string().optional(),
     status: zod_1.z.enum(['PENDING', 'PAID', 'PROCESSING', 'SHIPPED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELED']).optional(),
+});
+// Schema para pedido de convidado
+const guestOrderCreateSchema = zod_1.z.object({
+    items: zod_1.z.array(orderItemSchema).nonempty('O pedido deve ter pelo menos um item'),
+    customerEmail: zod_1.z.string().email('Email inválido'),
+    customerName: zod_1.z.string().min(3, 'Nome deve ter pelo menos 3 caracteres'),
+    customerPhone: zod_1.z.string().optional(),
+    shippingAddress: zod_1.z.object({
+        name: zod_1.z.string(),
+        street: zod_1.z.string(),
+        number: zod_1.z.string(),
+        complement: zod_1.z.string().optional(),
+        neighborhood: zod_1.z.string(),
+        city: zod_1.z.string(),
+        state: zod_1.z.string(),
+        zipCode: zod_1.z.string(),
+        cpfCnpj: zod_1.z.string().optional()
+    }),
+    paymentMethod: zod_1.z.enum(['PIX', 'BOLETO', 'CREDIT_CARD', 'DEBIT_CARD']),
+    total: zod_1.z.number().optional()
 });
 // Obter todos os pedidos (admin)
 const getAllOrders = (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -481,3 +501,86 @@ const addShipmentUpdate = (req, res) => __awaiter(void 0, void 0, void 0, functi
     }
 });
 exports.addShipmentUpdate = addShipmentUpdate;
+// Criar pedido para usuário não autenticado (guest)
+const createGuestOrder = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const validation = guestOrderCreateSchema.safeParse(req.body);
+        if (!validation.success) {
+            return res.status(400).json({
+                error: 'Dados inválidos',
+                details: validation.error.format()
+            });
+        }
+        const { items, customerEmail, customerName, customerPhone, shippingAddress, paymentMethod, total: sentTotal } = validation.data;
+        // Verificar disponibilidade dos produtos
+        const productIds = items.map(item => item.productId);
+        const products = yield prisma.product.findMany({
+            where: {
+                id: {
+                    in: productIds,
+                },
+            },
+        });
+        // Verificar se todos os produtos existem
+        if (products.length !== productIds.length) {
+            return res.status(400).json({ error: 'Um ou mais produtos não existem' });
+        }
+        // Verificar estoque
+        for (const item of items) {
+            const product = products.find(p => p.id === item.productId);
+            if (!product || product.stock < item.quantity) {
+                return res.status(400).json({
+                    error: 'Produto sem estoque suficiente',
+                    productId: item.productId
+                });
+            }
+        }
+        // Calcular total do pedido
+        const calculatedTotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+        // Usar o total enviado no request (que já inclui o desconto) ou o calculado
+        const total = sentTotal !== undefined ? sentTotal : calculatedTotal;
+        // Criar pedido com transaction para garantir consistência
+        const newOrder = yield prisma.$transaction((tx) => __awaiter(void 0, void 0, void 0, function* () {
+            // Criar o pedido
+            const order = yield tx.order.create({
+                data: {
+                    total,
+                    status: 'PENDING',
+                    paymentMethod,
+                    customerName,
+                    customerEmail,
+                    customerPhone,
+                    shippingAddress: JSON.stringify(shippingAddress),
+                    items: {
+                        create: items.map(item => ({
+                            productId: item.productId,
+                            quantity: item.quantity,
+                            price: item.price
+                        }))
+                    }
+                },
+                include: {
+                    items: true
+                }
+            });
+            // Atualizar estoque dos produtos
+            for (const item of items) {
+                yield tx.product.update({
+                    where: { id: item.productId },
+                    data: {
+                        stock: {
+                            decrement: item.quantity
+                        }
+                    }
+                });
+            }
+            return order;
+        }));
+        return res.status(201).json(newOrder);
+    }
+    catch (error) {
+        console.error('Erro ao criar pedido de convidado:', error);
+        return res.status(500).json({ error: 'Erro ao criar pedido' });
+    }
+});
+exports.createGuestOrder = createGuestOrder;

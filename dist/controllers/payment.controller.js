@@ -12,10 +12,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.asaasWebhook = exports.checkPaymentStatus = exports.generatePaymentLink = exports.processCreditCardPayment = void 0;
+exports.asaasWebhook = exports.checkPaymentStatus = exports.generatePaymentLink = exports.processDebitCardPayment = exports.processCreditCardPayment = void 0;
 const zod_1 = require("zod");
 const prisma_1 = __importDefault(require("../config/prisma"));
 const asaas_service_1 = __importDefault(require("../services/asaas.service"));
+const validation_1 = require("../utils/validation");
 // Schema para validação de pagamento com cartão de crédito
 const creditCardPaymentSchema = zod_1.z.object({
     orderId: zod_1.z.number().int().positive(),
@@ -43,6 +44,27 @@ const boletoPixPaymentSchema = zod_1.z.object({
     billingType: zod_1.z.enum(['BOLETO', 'PIX']),
     cpfCnpj: zod_1.z.string().min(11, 'CPF/CNPJ inválido').max(14, 'CPF/CNPJ inválido').optional(),
 });
+// Schema para validação de pagamento com cartão de débito
+const debitCardPaymentSchema = zod_1.z.object({
+    orderId: zod_1.z.number().int().positive(),
+    debitCard: zod_1.z.object({
+        holderName: zod_1.z.string().min(1, 'Nome do titular é obrigatório'),
+        number: zod_1.z.string().min(13, 'Número do cartão inválido').max(19, 'Número do cartão inválido'),
+        expiryMonth: zod_1.z.string().min(1, 'Mês de expiração é obrigatório').max(2, 'Mês de expiração inválido'),
+        expiryYear: zod_1.z.string().min(2, 'Ano de expiração é obrigatório').max(4, 'Ano de expiração inválido'),
+        ccv: zod_1.z.string().min(3, 'CCV inválido').max(4, 'CCV inválido'),
+    }),
+    holderInfo: zod_1.z.object({
+        name: zod_1.z.string().min(1, 'Nome é obrigatório'),
+        email: zod_1.z.string().email('Email inválido'),
+        cpfCnpj: zod_1.z.string().min(11, 'CPF/CNPJ inválido').max(14, 'CPF/CNPJ inválido'),
+        postalCode: zod_1.z.string().min(8, 'CEP inválido').max(9, 'CEP inválido'),
+        addressNumber: zod_1.z.string().min(1, 'Número do endereço é obrigatório'),
+        addressComplement: zod_1.z.string().optional(),
+        phone: zod_1.z.string().min(10, 'Telefone inválido').max(11, 'Telefone inválido'),
+    }),
+    remoteIp: zod_1.z.string().optional(),
+});
 // Schema para webhook
 const webhookSchema = zod_1.z.object({
     event: zod_1.z.string(),
@@ -67,6 +89,13 @@ const processCreditCardPayment = (req, res) => __awaiter(void 0, void 0, void 0,
             });
         }
         const { orderId, creditCard, holderInfo, remoteIp } = validation.data;
+        // Validar CPF/CNPJ
+        if (!(0, validation_1.validateDocument)(holderInfo.cpfCnpj)) {
+            return res.status(400).json({
+                error: 'CPF/CNPJ inválido',
+                message: 'O número de CPF/CNPJ fornecido não é válido'
+            });
+        }
         // Buscar o pedido
         const order = yield prisma_1.default.order.findUnique({
             where: { id: orderId },
@@ -84,11 +113,27 @@ const processCreditCardPayment = (req, res) => __awaiter(void 0, void 0, void 0,
             return res.status(400).json({ error: 'Este pedido não está pendente de pagamento' });
         }
         // Buscar ou criar cliente no Asaas
-        let customer = yield asaas_service_1.default.findCustomerByEmail(order.user.email);
-        if (!customer) {
+        let customer;
+        // Se o pedido pertence a um usuário autenticado
+        if (order.userId && order.user) {
+            customer = yield asaas_service_1.default.findCustomerByEmail(order.user.email);
+            if (!customer) {
+                customer = yield asaas_service_1.default.createCustomer({
+                    name: order.user.name || holderInfo.name || 'Cliente',
+                    email: order.user.email,
+                    cpfCnpj: holderInfo.cpfCnpj,
+                    phone: holderInfo.phone,
+                    postalCode: holderInfo.postalCode,
+                    addressNumber: holderInfo.addressNumber,
+                    complement: holderInfo.addressComplement,
+                });
+            }
+        }
+        else {
+            // Se for uma compra de convidado, usar as informações do titular
             customer = yield asaas_service_1.default.createCustomer({
-                name: order.user.name || holderInfo.name,
-                email: order.user.email,
+                name: holderInfo.name,
+                email: holderInfo.email,
                 cpfCnpj: holderInfo.cpfCnpj,
                 phone: holderInfo.phone,
                 postalCode: holderInfo.postalCode,
@@ -184,21 +229,28 @@ const processCreditCardPayment = (req, res) => __awaiter(void 0, void 0, void 0,
     }
 });
 exports.processCreditCardPayment = processCreditCardPayment;
-// Gerar link de pagamento (boleto/pix)
-const generatePaymentLink = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b;
+// Processar pagamento com cartão de débito
+const processDebitCardPayment = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b, _c;
     try {
         if (!req.user) {
             return res.status(401).json({ error: 'Usuário não autenticado' });
         }
-        const validation = boletoPixPaymentSchema.safeParse(req.body);
+        const validation = debitCardPaymentSchema.safeParse(req.body);
         if (!validation.success) {
             return res.status(400).json({
                 error: 'Dados inválidos',
                 details: validation.error.format()
             });
         }
-        const { orderId, billingType, cpfCnpj } = validation.data;
+        const { orderId, debitCard, holderInfo, remoteIp } = validation.data;
+        // Validar CPF/CNPJ
+        if (!(0, validation_1.validateDocument)(holderInfo.cpfCnpj)) {
+            return res.status(400).json({
+                error: 'CPF/CNPJ inválido',
+                message: 'O número de CPF/CNPJ fornecido não é válido'
+            });
+        }
         // Buscar o pedido
         const order = yield prisma_1.default.order.findUnique({
             where: { id: orderId },
@@ -215,33 +267,277 @@ const generatePaymentLink = (req, res) => __awaiter(void 0, void 0, void 0, func
         if (order.status !== 'PENDING') {
             return res.status(400).json({ error: 'Este pedido não está pendente de pagamento' });
         }
-        // Verificar se o CPF/CNPJ foi fornecido
-        if (!cpfCnpj) {
-            return res.status(400).json({ error: 'CPF/CNPJ é obrigatório para pagamentos' });
-        }
         // Buscar ou criar cliente no Asaas
         let customer;
-        try {
+        // Se o pedido pertence a um usuário autenticado
+        if (order.userId && order.user) {
             customer = yield asaas_service_1.default.findCustomerByEmail(order.user.email);
             if (!customer) {
-                // Criar novo cliente com o CPF/CNPJ fornecido
                 customer = yield asaas_service_1.default.createCustomer({
-                    name: order.user.name || 'Cliente',
+                    name: order.user.name || holderInfo.name || 'Cliente',
                     email: order.user.email,
-                    cpfCnpj: cpfCnpj
+                    cpfCnpj: holderInfo.cpfCnpj,
+                    phone: holderInfo.phone,
+                    postalCode: holderInfo.postalCode,
+                    addressNumber: holderInfo.addressNumber,
+                    complement: holderInfo.addressComplement,
                 });
             }
-            else {
-                // Atualizar cliente existente com o CPF/CNPJ fornecido
-                customer = yield asaas_service_1.default.updateCustomer(customer.id, {
-                    cpfCnpj: cpfCnpj
+        }
+        else {
+            // Se for uma compra de convidado, usar as informações do titular
+            customer = yield asaas_service_1.default.createCustomer({
+                name: holderInfo.name,
+                email: holderInfo.email,
+                cpfCnpj: holderInfo.cpfCnpj,
+                phone: holderInfo.phone,
+                postalCode: holderInfo.postalCode,
+                addressNumber: holderInfo.addressNumber,
+                complement: holderInfo.addressComplement,
+            });
+        }
+        // Criar pagamento no Asaas
+        const payment = yield asaas_service_1.default.createPayment({
+            customer: customer.id,
+            billingType: 'DEBIT_CARD',
+            value: Number(order.total),
+            dueDate: new Date().toISOString().split('T')[0], // Data atual
+            description: `Pedido #${order.id}`,
+            externalReference: String(order.id),
+            creditCard: {
+                holderName: debitCard.holderName,
+                number: debitCard.number,
+                expiryMonth: debitCard.expiryMonth,
+                expiryYear: debitCard.expiryYear,
+                ccv: debitCard.ccv,
+            },
+            creditCardHolderInfo: {
+                name: holderInfo.name,
+                email: holderInfo.email,
+                cpfCnpj: holderInfo.cpfCnpj,
+                postalCode: holderInfo.postalCode,
+                addressNumber: holderInfo.addressNumber,
+                addressComplement: holderInfo.addressComplement,
+                phone: holderInfo.phone,
+            },
+            remoteIp,
+        });
+        // Atualizar o pedido com as informações de pagamento
+        yield prisma_1.default.order.update({
+            where: { id: orderId },
+            data: {
+                status: asaas_service_1.default.mapAsaasStatusToOrderStatus(payment.status),
+            }
+        });
+        return res.json({
+            success: true,
+            payment: {
+                id: payment.id,
+                status: payment.status,
+                value: payment.value,
+                orderStatus: asaas_service_1.default.mapAsaasStatusToOrderStatus(payment.status),
+            }
+        });
+    }
+    catch (error) {
+        console.error('Erro ao processar pagamento com cartão de débito:', error);
+        // Verificar se é um erro de resposta da API
+        if (((_c = (_b = (_a = error.response) === null || _a === void 0 ? void 0 : _a.data) === null || _b === void 0 ? void 0 : _b.errors) === null || _c === void 0 ? void 0 : _c.length) > 0) {
+            const apiError = error.response.data.errors[0];
+            let errorMessage = apiError.description || 'Erro ao processar pagamento';
+            let statusCode = 400;
+            // Mapear códigos de erro específicos do cartão
+            switch (apiError.code) {
+                case 'invalid_credit_card':
+                    errorMessage = 'Cartão inválido ou não autorizado pela operadora';
+                    break;
+                case 'expired_card':
+                    errorMessage = 'Cartão expirado';
+                    break;
+                case 'insufficient_funds':
+                    errorMessage = 'Saldo insuficiente no cartão';
+                    break;
+                case 'blocked_credit_card':
+                    errorMessage = 'Cartão bloqueado';
+                    break;
+                case 'canceled_credit_card':
+                    errorMessage = 'Cartão cancelado';
+                    break;
+                case 'unauthorized_credit_card':
+                    errorMessage = 'Transação não autorizada. Contate o emissor do cartão.';
+                    break;
+                default:
+                    if (apiError.description.includes('cartão')) {
+                        errorMessage = `Erro no cartão: ${apiError.description}`;
+                    }
+                    else {
+                        errorMessage = apiError.description;
+                    }
+            }
+            return res.status(statusCode).json({
+                error: errorMessage,
+                code: apiError.code,
+                details: error.response.data
+            });
+        }
+        return res.status(500).json({ error: 'Erro ao processar pagamento' });
+    }
+});
+exports.processDebitCardPayment = processDebitCardPayment;
+// Gerar link de pagamento (boleto/pix)
+const generatePaymentLink = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
+    try {
+        // Validar os dados de entrada com zod
+        const schema = zod_1.z.object({
+            orderId: zod_1.z.number().or(zod_1.z.string().transform(val => Number(val))), // Permite enviar como string ou número
+            billingType: zod_1.z.enum(['BOLETO', 'PIX']),
+            cpfCnpj: zod_1.z.string().optional(),
+            // Campos adicionais para usuários não autenticados
+            email: zod_1.z.string().email().optional(),
+            name: zod_1.z.string().optional(),
+        });
+        const validationResult = schema.safeParse(req.body);
+        if (!validationResult.success) {
+            console.error('Erro de validação:', validationResult.error);
+            return res.status(400).json({
+                error: 'Dados inválidos',
+                details: validationResult.error.format()
+            });
+        }
+        const { orderId: orderIdParam, billingType, cpfCnpj, email, name } = validationResult.data;
+        const orderIdNum = Number(orderIdParam);
+        // Validar CPF/CNPJ se fornecido
+        if (cpfCnpj) {
+            if (!(0, validation_1.validateDocument)(cpfCnpj)) {
+                return res.status(400).json({
+                    error: 'CPF/CNPJ inválido',
+                    message: 'O número de CPF/CNPJ fornecido não é válido'
+                });
+            }
+        }
+        // Verificar se o pedido existe
+        const order = yield prisma_1.default.order.findUnique({
+            where: {
+                id: orderIdNum
+            }
+        });
+        if (!order) {
+            return res.status(404).json({ error: 'Pedido não encontrado' });
+        }
+        // Verificação de permissão - pular para rotas guest
+        const isGuestRoute = req.path.includes('/guest/');
+        if (!isGuestRoute && req.user) {
+            // Para usuários autenticados, verificar se o pedido pertence ao usuário
+            if (order.userId !== req.user.id && req.user.role !== 'ADMIN') {
+                return res.status(403).json({ error: 'Você não tem permissão para acessar este pedido' });
+            }
+        }
+        // Se for rota de guest e não tiver os campos obrigatórios, retornar erro
+        if (isGuestRoute && (!email || !name || !cpfCnpj)) {
+            return res.status(400).json({
+                error: 'Dados incompletos',
+                message: 'Nome, email e CPF/CNPJ são obrigatórios para pagamentos sem login'
+            });
+        }
+        // IMPORTANTE: Verificar se já existe um pagamento para este pedido
+        try {
+            const existingPayments = yield asaas_service_1.default.getPaymentsByExternalReference(String(order.id));
+            // Filtrar pagamentos pelo tipo de cobrança (boleto ou pix)
+            const filteredPayments = existingPayments
+                .filter(p => p.billingType === billingType)
+                .filter(p => !['CANCELLED', 'REFUNDED'].includes(p.status)); // Ignorar cancelados/estornados
+            // Se já existe um pagamento deste tipo para o pedido, retornar ele em vez de criar um novo
+            if (filteredPayments.length > 0) {
+                console.log(`Pagamento existente encontrado para pedido #${order.id}, tipo ${billingType}`);
+                const existingPayment = filteredPayments[0]; // Pegar o mais recente
+                const responsePayment = {
+                    id: existingPayment.id,
+                    status: existingPayment.status,
+                    value: existingPayment.value,
+                    dueDate: existingPayment.dueDate,
+                    bankSlipUrl: existingPayment.bankSlipUrl,
+                    invoiceUrl: existingPayment.invoiceUrl,
+                    orderStatus: asaas_service_1.default.mapAsaasStatusToOrderStatus(existingPayment.status),
+                };
+                // Para pagamentos PIX, buscar os dados do QR code
+                if (billingType === 'PIX') {
+                    try {
+                        const pixInfo = yield asaas_service_1.default.getPixInfo(existingPayment.id);
+                        // Adicionar as informações do PIX à resposta
+                        Object.assign(responsePayment, {
+                            pixQrCode: pixInfo.payload,
+                            pixCodeQrCode: pixInfo.payload,
+                            pixEncodedImage: pixInfo.encodedImage,
+                            pixCodeBase64: pixInfo.encodedImage
+                        });
+                    }
+                    catch (pixError) {
+                        console.error('Erro ao buscar dados do PIX existente:', pixError);
+                    }
+                }
+                return res.json({
+                    success: true,
+                    payment: responsePayment,
+                    message: 'Pagamento existente recuperado com sucesso.'
                 });
             }
         }
         catch (error) {
-            console.error('Erro ao criar/buscar cliente no Asaas:', error);
+            console.error('Erro ao verificar pagamentos existentes:', error);
+            // Continue normalmente se falhar esta verificação
+        }
+        // Buscar dados do cliente ou criar um novo
+        let customer;
+        try {
+            // Se o usuário estiver autenticado, buscar por ele
+            if (req.user) {
+                // Buscar usuário para obter dados atualizados
+                const user = yield prisma_1.default.user.findUnique({
+                    where: { id: req.user.id }
+                });
+                if (!user) {
+                    return res.status(404).json({ error: 'Usuário não encontrado' });
+                }
+                // Buscar cliente no Asaas pelo e-mail
+                const existingCustomer = yield asaas_service_1.default.findCustomerByEmail(user.email);
+                if (existingCustomer) {
+                    // Atualizar dados do cliente se necessário
+                    customer = existingCustomer;
+                }
+                else {
+                    // Criar novo cliente no Asaas
+                    customer = yield asaas_service_1.default.createCustomer({
+                        name: user.name || 'Cliente',
+                        email: user.email,
+                        cpfCnpj: cpfCnpj || '', // Usar o valor passado ou string vazia
+                        // Outros campos conforme necessário
+                    });
+                }
+            }
+            else {
+                // Para usuários não autenticados (guest), usar os dados da requisição
+                // Buscar cliente no Asaas pelo e-mail
+                const existingCustomer = yield asaas_service_1.default.findCustomerByEmail(email);
+                if (existingCustomer) {
+                    // Atualizar dados do cliente se necessário
+                    customer = existingCustomer;
+                }
+                else {
+                    // Criar novo cliente no Asaas
+                    customer = yield asaas_service_1.default.createCustomer({
+                        name: name,
+                        email: email,
+                        cpfCnpj: cpfCnpj || '',
+                        // Outros campos conforme necessário
+                    });
+                }
+            }
+        }
+        catch (error) {
+            console.error('Erro ao criar ou buscar cliente no Asaas:', error);
             return res.status(500).json({
-                error: 'Erro ao processar dados do cliente',
+                error: 'Erro ao processar cliente',
                 details: ((_a = error.response) === null || _a === void 0 ? void 0 : _a.data) || error.message
             });
         }
@@ -250,7 +546,7 @@ const generatePaymentLink = (req, res) => __awaiter(void 0, void 0, void 0, func
             const payment = yield asaas_service_1.default.createPayment({
                 customer: customer.id,
                 billingType,
-                value: Number(order.total),
+                value: Number(order.total), // O order.total já contém o desconto aplicado quando for PIX
                 dueDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 3 dias a partir de hoje
                 description: `Pedido #${order.id}`,
                 externalReference: String(order.id),
@@ -310,9 +606,6 @@ exports.generatePaymentLink = generatePaymentLink;
 // Verificar status do pagamento
 const checkPaymentStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        if (!req.user) {
-            return res.status(401).json({ error: 'Usuário não autenticado' });
-        }
         const { orderId } = req.params;
         const orderIdNum = Number(orderId);
         if (isNaN(orderIdNum)) {
@@ -325,9 +618,11 @@ const checkPaymentStatus = (req, res) => __awaiter(void 0, void 0, void 0, funct
         if (!order) {
             return res.status(404).json({ error: 'Pedido não encontrado' });
         }
-        // Verificar se o usuário é o dono do pedido ou admin
-        if (order.userId !== req.user.id && req.user.role !== 'ADMIN') {
-            return res.status(403).json({ error: 'Acesso negado' });
+        // Se usuário estiver autenticado, verificar se é o dono do pedido ou admin
+        if (req.user && order.userId !== null) {
+            if (order.userId !== req.user.id && req.user.role !== 'ADMIN') {
+                return res.status(403).json({ error: 'Acesso negado' });
+            }
         }
         try {
             // Verificar se existe um pagamento no Asaas para este pedido 
@@ -368,17 +663,18 @@ const checkPaymentStatus = (req, res) => __awaiter(void 0, void 0, void 0, funct
             });
         }
         catch (error) {
-            console.error('Erro ao verificar pagamento no Asaas:', error);
-            // Em caso de erro na API do Asaas, retornar o status atual do pedido
+            console.error('Erro ao verificar status de pagamento no Asaas:', error);
+            // Em caso de erro, retorna o status atual do pedido
             return res.json({
                 orderId: order.id,
                 status: order.status,
+                error: 'Não foi possível obter atualizações do status de pagamento'
             });
         }
     }
     catch (error) {
-        console.error('Erro ao verificar status do pagamento:', error);
-        return res.status(500).json({ error: 'Erro ao verificar status do pagamento' });
+        console.error('Erro ao verificar status do pedido:', error);
+        return res.status(500).json({ error: 'Erro ao verificar status do pedido' });
     }
 });
 exports.checkPaymentStatus = checkPaymentStatus;

@@ -31,6 +31,22 @@ class AsaasService {
         this.apiUrl = config_1.default.asaas.apiUrl;
         this.apiKey = config_1.default.asaas.apiKey;
         this.walletId = config_1.default.asaas.walletId;
+        // Mapeamento de status do Asaas para status de pedido
+        this.statusMapping = {
+            'PENDING': 'PENDING',
+            'CONFIRMED': 'PAID',
+            'RECEIVED': 'PAID',
+            'OVERDUE': 'PENDING',
+            'REFUNDED': 'CANCELED',
+            'RECEIVED_IN_CASH': 'PAID',
+            'REFUND_REQUESTED': 'PENDING',
+            'CHARGEBACK_REQUESTED': 'PENDING',
+            'CHARGEBACK_DISPUTE': 'PENDING',
+            'AWAITING_CHARGEBACK_REVERSAL': 'PENDING',
+            'DUNNING_REQUESTED': 'PENDING',
+            'DUNNING_RECEIVED': 'PAID',
+            'AWAITING_RISK_ANALYSIS': 'PENDING'
+        };
     }
     // Headers padrão para as requisições
     getHeaders() {
@@ -85,10 +101,10 @@ class AsaasService {
     // Criar um pagamento
     createPayment(paymentData) {
         return __awaiter(this, void 0, void 0, function* () {
-            var _a, _b, _c, _d, _e, _f, _g, _h;
+            var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r;
             try {
                 // Remover o walletId do objeto de dados e enviá-lo como parâmetro de consulta
-                const _j = Object.assign(Object.assign({}, paymentData), { walletId: this.walletId }), { walletId } = _j, paymentDataWithoutWallet = __rest(_j, ["walletId"]);
+                const _s = Object.assign(Object.assign({}, paymentData), { walletId: this.walletId }), { walletId } = _s, paymentDataWithoutWallet = __rest(_s, ["walletId"]);
                 console.log('Enviando requisição para criar pagamento:', {
                     url: `${this.apiUrl}/v3/payments?wallet=${this.walletId}`,
                     data: paymentDataWithoutWallet
@@ -114,18 +130,52 @@ class AsaasService {
                     console.log('- lastFourDigits:', (_a = response.data.creditCard) === null || _a === void 0 ? void 0 : _a.lastFourDigits);
                     console.log('- transactionReceiptUrl:', response.data.transactionReceiptUrl);
                 }
+                // Para Cartão de Débito, exibir informações específicas
+                if (paymentDataWithoutWallet.billingType === 'DEBIT_CARD') {
+                    console.log('Detalhes do pagamento com Cartão de Débito:');
+                    console.log('- status:', response.data.status);
+                    console.log('- creditCardId:', response.data.creditCardId);
+                    console.log('- creditCardBrand:', response.data.creditCardBrand);
+                    console.log('- creditCardToken:', response.data.creditCardToken);
+                    console.log('- lastFourDigits:', (_b = response.data.creditCard) === null || _b === void 0 ? void 0 : _b.lastFourDigits);
+                    console.log('- transactionReceiptUrl:', response.data.transactionReceiptUrl);
+                }
                 return response.data;
             }
             catch (error) {
                 console.error('Erro ao criar pagamento no Asaas:', error);
                 // Log detalhado para erros de cartão de crédito
-                if (paymentData.billingType === 'CREDIT_CARD' && ((_b = error.response) === null || _b === void 0 ? void 0 : _b.data)) {
-                    console.error('Detalhes do erro de pagamento com cartão:');
+                if (paymentData.billingType === 'CREDIT_CARD' && ((_c = error.response) === null || _c === void 0 ? void 0 : _c.data)) {
+                    console.error('Detalhes do erro de pagamento com cartão de crédito:');
                     console.error('- Status:', error.response.status);
-                    console.error('- Mensagem:', ((_d = (_c = error.response.data.errors) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.description) || error.message);
-                    console.error('- Código:', (_f = (_e = error.response.data.errors) === null || _e === void 0 ? void 0 : _e[0]) === null || _f === void 0 ? void 0 : _f.code);
+                    console.error('- Mensagem:', ((_e = (_d = error.response.data.errors) === null || _d === void 0 ? void 0 : _d[0]) === null || _e === void 0 ? void 0 : _e.description) || error.message);
+                    console.error('- Código:', (_g = (_f = error.response.data.errors) === null || _f === void 0 ? void 0 : _f[0]) === null || _g === void 0 ? void 0 : _g.code);
                     // Tratar mensagens de erro específicas de cartão
-                    const errorCode = (_h = (_g = error.response.data.errors) === null || _g === void 0 ? void 0 : _g[0]) === null || _h === void 0 ? void 0 : _h.code;
+                    const errorCode = (_j = (_h = error.response.data.errors) === null || _h === void 0 ? void 0 : _h[0]) === null || _j === void 0 ? void 0 : _j.code;
+                    if (errorCode) {
+                        switch (errorCode) {
+                            case 'invalid_credit_card':
+                                console.error('Cartão inválido ou não autorizado pela operadora');
+                                break;
+                            case 'expired_card':
+                                console.error('Cartão expirado');
+                                break;
+                            case 'insufficient_funds':
+                                console.error('Saldo insuficiente');
+                                break;
+                            default:
+                                console.error('Erro desconhecido no processamento do cartão');
+                        }
+                    }
+                }
+                // Log detalhado para erros de cartão de débito
+                if (paymentData.billingType === 'DEBIT_CARD' && ((_k = error.response) === null || _k === void 0 ? void 0 : _k.data)) {
+                    console.error('Detalhes do erro de pagamento com cartão de débito:');
+                    console.error('- Status:', error.response.status);
+                    console.error('- Mensagem:', ((_m = (_l = error.response.data.errors) === null || _l === void 0 ? void 0 : _l[0]) === null || _m === void 0 ? void 0 : _m.description) || error.message);
+                    console.error('- Código:', (_p = (_o = error.response.data.errors) === null || _o === void 0 ? void 0 : _o[0]) === null || _p === void 0 ? void 0 : _p.code);
+                    // Tratar mensagens de erro específicas de cartão
+                    const errorCode = (_r = (_q = error.response.data.errors) === null || _q === void 0 ? void 0 : _q[0]) === null || _r === void 0 ? void 0 : _r.code;
                     if (errorCode) {
                         switch (errorCode) {
                             case 'invalid_credit_card':
@@ -184,7 +234,7 @@ class AsaasService {
                 return response.data;
             }
             catch (error) {
-                console.error('Erro ao consultar status do pagamento no Asaas:', error);
+                console.error('Erro ao consultar status do pagamento:', error);
                 throw error;
             }
         });
@@ -193,11 +243,11 @@ class AsaasService {
     getPaymentsByExternalReference(externalReference) {
         return __awaiter(this, void 0, void 0, function* () {
             try {
-                console.log(`Buscando pagamentos com referência externa: ${externalReference}`);
                 const response = yield axios_1.default.get(`${this.apiUrl}/v3/payments?externalReference=${externalReference}`, { headers: this.getHeaders() });
-                console.log(`Encontrados ${response.data.data.length} pagamentos para a referência ${externalReference}`);
-                // Retorna a lista de pagamentos encontrados
-                return response.data.data || [];
+                if (response.data.data && response.data.data.length > 0) {
+                    return response.data.data;
+                }
+                return [];
             }
             catch (error) {
                 console.error('Erro ao buscar pagamentos por referência externa:', error);
@@ -207,34 +257,29 @@ class AsaasService {
     }
     // Processar webhook do Asaas
     processWebhook(data) {
-        // Processar notificações de pagamento do Asaas
-        const event = data.event;
-        const payment = data.payment;
-        return {
-            event,
-            payment,
-            status: this.mapAsaasStatusToOrderStatus(payment.status)
-        };
+        try {
+            console.log('Processando webhook do Asaas:', data);
+            // Verificar se o evento é relacionado a pagamento
+            if (data && data.event && data.payment) {
+                return {
+                    event: data.event,
+                    payment: {
+                        id: data.payment.id,
+                        status: data.payment.status
+                    },
+                    status: this.mapAsaasStatusToOrderStatus(data.payment.status)
+                };
+            }
+            throw new Error('Dados de webhook inválidos');
+        }
+        catch (error) {
+            console.error('Erro ao processar webhook:', error);
+            throw error;
+        }
     }
     // Mapear status do Asaas para status do pedido
     mapAsaasStatusToOrderStatus(asaasStatus) {
-        switch (asaasStatus) {
-            case 'CONFIRMED':
-            case 'RECEIVED':
-            case 'RECEIVED_IN_CASH':
-                return 'PAID';
-            case 'PENDING':
-                return 'PENDING';
-            case 'OVERDUE':
-            case 'REFUNDED':
-            case 'REFUND_REQUESTED':
-            case 'CHARGEBACK_REQUESTED':
-            case 'CHARGEBACK_DISPUTE':
-            case 'AWAITING_CHARGEBACK_REVERSAL':
-                return 'CANCELED';
-            default:
-                return 'PENDING';
-        }
+        return this.statusMapping[asaasStatus] || 'PENDING';
     }
 }
 exports.default = new AsaasService();

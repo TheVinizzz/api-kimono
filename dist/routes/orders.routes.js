@@ -42,6 +42,8 @@ router.get('/user', auth_1.auth, ordersController.getUserOrders);
 router.get('/:id', auth_1.auth, ordersController.getOrderById);
 router.get('/:id/tracking', auth_1.auth, ordersController.getOrderTracking);
 router.post('/', auth_1.auth, ordersController.createOrder);
+// Rota para convidados (sem autenticação)
+router.post('/guest', ordersController.createGuestOrder);
 // Rotas de administrador
 router.get('/', auth_1.auth, auth_1.isAdmin, ordersController.getAllOrders);
 router.put('/:id/status', auth_1.auth, auth_1.isAdmin, ordersController.updateOrderStatus);

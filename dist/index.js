@@ -16,6 +16,8 @@ const admin_routes_1 = __importDefault(require("./routes/admin.routes"));
 const addresses_routes_1 = __importDefault(require("./routes/addresses.routes"));
 const payment_routes_1 = __importDefault(require("./routes/payment.routes"));
 const analytics_routes_1 = __importDefault(require("./routes/analytics.routes"));
+const upload_routes_1 = __importDefault(require("./routes/upload.routes"));
+const product_images_routes_1 = __importDefault(require("./routes/product-images.routes"));
 // Importar middleware de analytics
 const analytics_middleware_1 = require("./middleware/analytics.middleware");
 // Inicializar o app
@@ -50,6 +52,8 @@ app.use('/api/admin', admin_routes_1.default);
 app.use('/api/user/addresses', addresses_routes_1.default);
 app.use('/api/payment', payment_routes_1.default);
 app.use('/api/analytics', analytics_routes_1.default);
+app.use('/api/upload', upload_routes_1.default);
+app.use('/api/product-images', product_images_routes_1.default);
 // Rota de saúde para verificação
 app.get('/health', (_req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
