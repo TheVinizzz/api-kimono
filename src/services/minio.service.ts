@@ -1,17 +1,20 @@
-import * as AWS from 'aws-sdk';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 export class MinioService {
-  private readonly s3: AWS.S3;
+  private readonly s3Client: S3Client;
   private readonly bucketName: string;
 
   constructor() {
     this.bucketName = process.env.MINIO_BUCKET || 'shopping-images';
-    this.s3 = new AWS.S3({
+    this.s3Client = new S3Client({
       endpoint: process.env.MINIO_URL,
-      accessKeyId: process.env.MINIO_PUBLIC_KEY,
-      secretAccessKey: process.env.MINIO_SECRET_KEY,
-      s3ForcePathStyle: true, // necessário para MinIO
-      signatureVersion: 'v4',
+      credentials: {
+        accessKeyId: process.env.MINIO_PUBLIC_KEY || '',
+        secretAccessKey: process.env.MINIO_SECRET_KEY || '',
+      },
+      region: 'us-east-1', // MinIO requer uma região
+      forcePathStyle: true, // necessário para MinIO
     });
   }
 
@@ -50,17 +53,14 @@ export class MinioService {
   ): Promise<string> {
     try {
       const key = `${folder}/${fileName}`;
-      const params: AWS.S3.PutObjectRequest = {
+      const command = new PutObjectCommand({
         Bucket: this.bucketName,
         Key: key,
         Body: file,
-      };
+        ContentType: contentType,
+      });
 
-      if (contentType) {
-        params.ContentType = contentType;
-      }
-
-      await this.s3.putObject(params).promise();
+      await this.s3Client.send(command);
       
       console.log(
         `Arquivo ${fileName} enviado com sucesso para a pasta ${folder} no bucket ${this.bucketName}`
@@ -91,13 +91,28 @@ export class MinioService {
 
   async downloadFile(fileName: string): Promise<Buffer> {
     try {
-      const data = await this.s3
-        .getObject({
-          Bucket: this.bucketName,
-          Key: fileName,
-        })
-        .promise();
-      return data.Body as Buffer;
+      const command = new GetObjectCommand({
+        Bucket: this.bucketName,
+        Key: fileName,
+      });
+
+      const response = await this.s3Client.send(command);
+      
+      if (!response.Body) {
+        throw new Error('Arquivo não encontrado ou vazio');
+      }
+
+      // Converter stream para buffer
+      const chunks: Uint8Array[] = [];
+      const reader = response.Body.transformToWebStream().getReader();
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+
+      return Buffer.concat(chunks);
     } catch (error: any) {
       console.error(
         `Erro ao baixar arquivo ${fileName}`,
@@ -109,12 +124,12 @@ export class MinioService {
 
   async deleteFile(fileName: string): Promise<void> {
     try {
-      await this.s3
-        .deleteObject({
-          Bucket: this.bucketName,
-          Key: fileName,
-        })
-        .promise();
+      const command = new DeleteObjectCommand({
+        Bucket: this.bucketName,
+        Key: fileName,
+      });
+
+      await this.s3Client.send(command);
       console.log(
         `Arquivo ${fileName} removido com sucesso do bucket ${this.bucketName}`
       );
@@ -133,14 +148,15 @@ export class MinioService {
     contentType = 'image/*'
   ): Promise<string> {
     try {
-      const params = {
+      const command = new PutObjectCommand({
         Bucket: this.bucketName,
         Key: objectName,
-        Expires: expirySeconds,
         ContentType: contentType,
-      };
+      });
 
-      return await this.s3.getSignedUrlPromise('putObject', params);
+      return await getSignedUrl(this.s3Client, command, { 
+        expiresIn: expirySeconds 
+      });
     } catch (error: any) {
       console.error(
         `Erro ao gerar URL de upload: ${error?.message || 'Erro desconhecido'}`,
@@ -152,13 +168,13 @@ export class MinioService {
 
   async listFiles(folder?: string): Promise<string[]> {
     try {
-      const params: AWS.S3.ListObjectsV2Request = {
+      const command = new ListObjectsV2Command({
         Bucket: this.bucketName,
         Prefix: folder ? `${folder}/` : undefined,
-      };
+      });
 
-      const result = await this.s3.listObjectsV2(params).promise();
-      return result.Contents?.map(obj => obj.Key || '') || [];
+      const result = await this.s3Client.send(command);
+      return result.Contents?.map((obj: any) => obj.Key || '') || [];
     } catch (error: any) {
       console.error(
         `Erro ao listar arquivos${folder ? ` da pasta ${folder}` : ''}`,

@@ -6,10 +6,15 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "nodemon --exec ts-node src/index.ts",
+    "clean": "rm -rf dist && rm -rf node_modules/.cache",
+    "build:clean": "npm run clean && npm run build",
+    "build:production": "npm ci --only=production && npm run build",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "prisma:seed": "ts-node prisma/seed.ts"
+    "prisma:seed": "ts-node prisma/seed.ts",
+    "docker:build": "docker build -t shopping-api .",
+    "docker:run": "docker run -p 4000:4000 shopping-api"
   },
   "keywords": [],
   "author": "",
