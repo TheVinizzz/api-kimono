@@ -14,12 +14,18 @@ model Product {
   price         Decimal        @db.Decimal(10, 2)
   originalPrice Decimal?       @db.Decimal(10, 2)
   stock         Int            @default(0)
+  blingId       BigInt?        @unique
+  sku           String?        @unique
+  ncm           String?
+  weight        Float?
+  gtin          String?
   imageUrl      String?        // Mantém por compatibilidade, será a imagem principal
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   categoryId    Int?
   orderItems    OrderItem[]
   images        ProductImage[] // Nova relação para múltiplas imagens
+  variants      ProductVariant[] // Nova relação para variações de tamanho/preço
   category      Category?      @relation(fields: [categoryId], references: [id])
 
   @@index([categoryId])
@@ -36,6 +42,24 @@ model ProductImage {
 
   @@index([productId])
   @@index([productId, order])
+}
+
+model ProductVariant {
+  id         Int     @id @default(autoincrement())
+  productId  Int
+  size       String  // P, M, G, GG, etc.
+  price      Decimal @db.Decimal(10, 2)
+  stock      Int     @default(0)
+  sku        String? // Código único da variação
+  isActive   Boolean @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems OrderItem[]
+
+  @@unique([productId, size]) // Garantir que não há tamanhos duplicados por produto
+  @@index([productId])
+  @@index([size])
 }
 
 model Category {
@@ -73,28 +97,37 @@ model Order {
   departureDate     DateTime?
   currentLocation   String?
   paymentMethod     String?
+  paymentStatus     String?          // Status do pagamento (PENDING, PAID, FAILED, etc.)
+  paymentId         String?          // ID do pagamento no Mercado Pago
   customerName      String?
   customerEmail     String?
   customerPhone     String?
+  customerDocument  String?          // CPF/CNPJ do cliente
   shippingAddress   String?
   user              User?            @relation(fields: [userId], references: [id])
   items             OrderItem[]
   trackingUpdates   ShipmentUpdate[]
 
   @@index([userId])
+  @@index([paymentId])
+  @@index([customerEmail])
 }
 
 model OrderItem {
-  id        Int     @id @default(autoincrement())
-  orderId   Int
-  productId Int
-  quantity  Int
-  price     Decimal @db.Decimal(10, 2)
-  order     Order   @relation(fields: [orderId], references: [id])
-  product   Product @relation(fields: [productId], references: [id])
+  id               Int             @id @default(autoincrement())
+  orderId          Int
+  productId        Int
+  productVariantId Int?            // Nova relação opcional com variação
+  quantity         Int
+  price            Decimal         @db.Decimal(10, 2)
+  size             String?         // Tamanho selecionado (para referência)
+  order            Order           @relation(fields: [orderId], references: [id])
+  product          Product         @relation(fields: [productId], references: [id])
+  productVariant   ProductVariant? @relation(fields: [productVariantId], references: [id])
 
   @@index([orderId])
   @@index([productId])
+  @@index([productVariantId])
 }
 
 model ShipmentUpdate {

@@ -34,16 +34,16 @@ const parseUserAgent = (userAgent: string | undefined) => {
   if (!userAgent) return null;
   
   try {
-    const parser = new UAParser(userAgent);
-    const browser = parser.getBrowser();
-    const device = parser.getDevice();
-    const os = parser.getOS();
-    
-    return {
-      browserName: browser.name || 'unknown',
-      deviceType: device.type || 'desktop',
-      operatingSystem: os.name || 'unknown',
-    };
+  const parser = new UAParser(userAgent);
+  const browser = parser.getBrowser();
+  const device = parser.getDevice();
+  const os = parser.getOS();
+  
+  return {
+    browserName: browser.name || 'unknown',
+    deviceType: device.type || 'desktop',
+    operatingSystem: os.name || 'unknown',
+  };
   } catch (error) {
     console.error('Erro ao parsear User-Agent:', error);
     return null;
@@ -56,8 +56,8 @@ export const trackPageVisit = async (req: Request, res: Response, next: NextFunc
   
   // Executar analytics de forma assíncrona sem bloquear a resposta
   setImmediate(async () => {
-    try {
-      // Só rastrear requisições GET de páginas (ignorar assets, API, etc)
+  try {
+    // Só rastrear requisições GET de páginas (ignorar assets, API, etc)
       if (req.method !== 'GET' || req.path.startsWith('/api/') || req.path.includes('.')) {
         return;
       }
@@ -81,28 +81,28 @@ export const trackPageVisit = async (req: Request, res: Response, next: NextFunc
       // Registrar a visita com timeout
       await Promise.race([
         prismaClient.pageVisit.create({
-          data: {
-            url: req.protocol + '://' + req.get('host') + req.originalUrl,
-            path: req.path,
-            userAgent,
-            ipAddress,
-            referrer: referrer?.toString(),
-            userId,
-            sessionId,
-            deviceType: deviceInfo?.deviceType,
-            browserName: deviceInfo?.browserName,
-            operatingSystem: deviceInfo?.operatingSystem,
-            country: null,
-            city: null,
-          },
+        data: {
+          url: req.protocol + '://' + req.get('host') + req.originalUrl,
+          path: req.path,
+          userAgent,
+          ipAddress,
+          referrer: referrer?.toString(),
+          userId,
+          sessionId,
+          deviceType: deviceInfo?.deviceType,
+          browserName: deviceInfo?.browserName,
+          operatingSystem: deviceInfo?.operatingSystem,
+          country: null,
+          city: null,
+        },
         }),
         new Promise((_, reject) => 
           setTimeout(() => reject(new Error('Analytics timeout')), 5000)
         )
       ]);
-    } catch (error) {
+  } catch (error) {
       // Log do erro mas não afetar a aplicação
-      console.error('Erro ao rastrear visita:', error);
-    }
+    console.error('Erro ao rastrear visita:', error);
+  }
   });
 }; 

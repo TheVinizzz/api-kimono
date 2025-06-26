@@ -12,10 +12,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.asaasWebhook = exports.checkPaymentStatus = exports.generatePaymentLink = exports.processDebitCardPayment = exports.processCreditCardPayment = void 0;
+exports.asaasWebhook = exports.mercadoPagoWebhook = exports.checkPaymentStatus = exports.generatePaymentLink = exports.processDebitCardPayment = exports.processCreditCardPayment = void 0;
 const zod_1 = require("zod");
 const prisma_1 = __importDefault(require("../config/prisma"));
-const asaas_service_1 = __importDefault(require("../services/asaas.service"));
+const mercadopago_service_1 = __importDefault(require("../services/mercadopago.service"));
 const validation_1 = require("../utils/validation");
 // Schema para validação de pagamento com cartão de crédito
 const creditCardPaymentSchema = zod_1.z.object({
@@ -36,12 +36,11 @@ const creditCardPaymentSchema = zod_1.z.object({
         addressComplement: zod_1.z.string().optional(),
         phone: zod_1.z.string().min(10, 'Telefone inválido').max(11, 'Telefone inválido'),
     }),
-    remoteIp: zod_1.z.string().optional(),
+    installments: zod_1.z.number().int().min(1).max(12).optional(),
 });
-// Schema para validação de pagamento via boleto/pix
-const boletoPixPaymentSchema = zod_1.z.object({
+// Schema para validação de pagamento via PIX
+const pixPaymentSchema = zod_1.z.object({
     orderId: zod_1.z.number().int().positive(),
-    billingType: zod_1.z.enum(['BOLETO', 'PIX']),
     cpfCnpj: zod_1.z.string().min(11, 'CPF/CNPJ inválido').max(14, 'CPF/CNPJ inválido').optional(),
 });
 // Schema para validação de pagamento com cartão de débito
@@ -63,20 +62,19 @@ const debitCardPaymentSchema = zod_1.z.object({
         addressComplement: zod_1.z.string().optional(),
         phone: zod_1.z.string().min(10, 'Telefone inválido').max(11, 'Telefone inválido'),
     }),
-    remoteIp: zod_1.z.string().optional(),
+    installments: zod_1.z.number().int().min(1).max(12).optional(),
 });
 // Schema para webhook
 const webhookSchema = zod_1.z.object({
-    event: zod_1.z.string(),
-    payment: zod_1.z.object({
+    type: zod_1.z.string(),
+    action: zod_1.z.string(),
+    data: zod_1.z.object({
         id: zod_1.z.string(),
-        status: zod_1.z.string(),
-        externalReference: zod_1.z.string().optional(),
     }),
 });
 // Processar pagamento com cartão de crédito
 const processCreditCardPayment = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     try {
         if (!req.user) {
             return res.status(401).json({ error: 'Usuário não autenticado' });
@@ -88,7 +86,7 @@ const processCreditCardPayment = (req, res) => __awaiter(void 0, void 0, void 0,
                 details: validation.error.format()
             });
         }
-        const { orderId, creditCard, holderInfo, remoteIp } = validation.data;
+        const { orderId, creditCard, holderInfo, installments } = validation.data;
         // Validar CPF/CNPJ
         if (!(0, validation_1.validateDocument)(holderInfo.cpfCnpj)) {
             return res.status(400).json({
@@ -112,66 +110,57 @@ const processCreditCardPayment = (req, res) => __awaiter(void 0, void 0, void 0,
         if (order.status !== 'PENDING') {
             return res.status(400).json({ error: 'Este pedido não está pendente de pagamento' });
         }
-        // Buscar ou criar cliente no Asaas
-        let customer;
-        // Se o pedido pertence a um usuário autenticado
-        if (order.userId && order.user) {
-            customer = yield asaas_service_1.default.findCustomerByEmail(order.user.email);
-            if (!customer) {
-                customer = yield asaas_service_1.default.createCustomer({
-                    name: order.user.name || holderInfo.name || 'Cliente',
-                    email: order.user.email,
-                    cpfCnpj: holderInfo.cpfCnpj,
-                    phone: holderInfo.phone,
-                    postalCode: holderInfo.postalCode,
-                    addressNumber: holderInfo.addressNumber,
-                    complement: holderInfo.addressComplement,
-                });
+        // Primeiro criar o token do cartão
+        const cardToken = yield mercadopago_service_1.default.createCardToken({
+            card_number: creditCard.number,
+            security_code: creditCard.ccv,
+            expiration_month: Number(creditCard.expiryMonth),
+            expiration_year: Number(creditCard.expiryYear),
+            cardholder: {
+                name: creditCard.holderName,
+                identification: {
+                    type: holderInfo.cpfCnpj.length === 11 ? 'CPF' : 'CNPJ',
+                    number: holderInfo.cpfCnpj
+                }
             }
-        }
-        else {
-            // Se for uma compra de convidado, usar as informações do titular
-            customer = yield asaas_service_1.default.createCustomer({
-                name: holderInfo.name,
-                email: holderInfo.email,
-                cpfCnpj: holderInfo.cpfCnpj,
-                phone: holderInfo.phone,
-                postalCode: holderInfo.postalCode,
-                addressNumber: holderInfo.addressNumber,
-                complement: holderInfo.addressComplement,
-            });
-        }
-        // Criar pagamento no Asaas
-        const payment = yield asaas_service_1.default.createPayment({
-            customer: customer.id,
-            billingType: 'CREDIT_CARD',
-            value: Number(order.total),
-            dueDate: new Date().toISOString().split('T')[0], // Data atual
+        });
+        // Preparar dados do pagador
+        const [firstName, ...lastNameParts] = holderInfo.name.split(' ');
+        const lastName = lastNameParts.join(' ') || '';
+        // Criar pagamento no Mercado Pago
+        const payment = yield mercadopago_service_1.default.createPayment({
+            transaction_amount: Number(order.total),
+            token: cardToken,
             description: `Pedido #${order.id}`,
-            externalReference: String(order.id),
-            creditCard: {
-                holderName: creditCard.holderName,
-                number: creditCard.number,
-                expiryMonth: creditCard.expiryMonth,
-                expiryYear: creditCard.expiryYear,
-                ccv: creditCard.ccv,
+            installments: installments || 1,
+            payment_method_id: 'visa', // Será detectado automaticamente pelo token
+            payer: {
+                email: ((_a = order.user) === null || _a === void 0 ? void 0 : _a.email) || holderInfo.email,
+                first_name: firstName,
+                last_name: lastName,
+                identification: {
+                    type: holderInfo.cpfCnpj.length === 11 ? 'CPF' : 'CNPJ',
+                    number: holderInfo.cpfCnpj
+                },
+                phone: {
+                    area_code: holderInfo.phone.slice(0, 2),
+                    number: holderInfo.phone.slice(2)
+                },
+                address: {
+                    zip_code: holderInfo.postalCode,
+                    street_number: holderInfo.addressNumber
+                }
             },
-            creditCardHolderInfo: {
-                name: holderInfo.name,
-                email: holderInfo.email,
-                cpfCnpj: holderInfo.cpfCnpj,
-                postalCode: holderInfo.postalCode,
-                addressNumber: holderInfo.addressNumber,
-                addressComplement: holderInfo.addressComplement,
-                phone: holderInfo.phone,
-            },
-            remoteIp,
+            external_reference: String(order.id),
+            metadata: {
+                order_id: String(order.id)
+            }
         });
         // Atualizar o pedido com as informações de pagamento
         yield prisma_1.default.order.update({
             where: { id: orderId },
             data: {
-                status: asaas_service_1.default.mapAsaasStatusToOrderStatus(payment.status),
+                status: mercadopago_service_1.default.mapMercadoPagoStatusToOrderStatus(payment.status),
             }
         });
         return res.json({
@@ -179,59 +168,56 @@ const processCreditCardPayment = (req, res) => __awaiter(void 0, void 0, void 0,
             payment: {
                 id: payment.id,
                 status: payment.status,
-                value: payment.value,
-                orderStatus: asaas_service_1.default.mapAsaasStatusToOrderStatus(payment.status),
+                status_detail: payment.status_detail,
+                transaction_amount: payment.transaction_amount,
+                orderStatus: mercadopago_service_1.default.mapMercadoPagoStatusToOrderStatus(payment.status),
             }
         });
     }
     catch (error) {
         console.error('Erro ao processar pagamento com cartão:', error);
         // Verificar se é um erro de resposta da API
-        if (((_c = (_b = (_a = error.response) === null || _a === void 0 ? void 0 : _a.data) === null || _b === void 0 ? void 0 : _b.errors) === null || _c === void 0 ? void 0 : _c.length) > 0) {
-            const apiError = error.response.data.errors[0];
+        if (((_d = (_c = (_b = error.response) === null || _b === void 0 ? void 0 : _b.data) === null || _c === void 0 ? void 0 : _c.cause) === null || _d === void 0 ? void 0 : _d.length) > 0) {
+            const apiError = error.response.data.cause[0];
             let errorMessage = apiError.description || 'Erro ao processar pagamento';
-            let statusCode = 400;
-            // Mapear códigos de erro específicos do cartão de crédito
+            // Mapear códigos de erro específicos do Mercado Pago
             switch (apiError.code) {
-                case 'invalid_credit_card':
-                    errorMessage = 'Cartão inválido ou não autorizado pela operadora';
+                case 'invalid_card_number':
+                    errorMessage = 'Número do cartão inválido';
                     break;
-                case 'expired_card':
-                    errorMessage = 'Cartão expirado';
+                case 'invalid_expiration_date':
+                    errorMessage = 'Data de expiração inválida';
                     break;
-                case 'insufficient_funds':
-                    errorMessage = 'Saldo insuficiente no cartão';
+                case 'invalid_security_code':
+                    errorMessage = 'Código de segurança inválido';
                     break;
-                case 'blocked_credit_card':
-                    errorMessage = 'Cartão bloqueado';
+                case 'invalid_issuer':
+                    errorMessage = 'Emissor do cartão inválido';
                     break;
-                case 'canceled_credit_card':
-                    errorMessage = 'Cartão cancelado';
+                case 'rejected_insufficient_amount':
+                    errorMessage = 'Cartão sem limite suficiente';
                     break;
-                case 'unauthorized_credit_card':
-                    errorMessage = 'Transação não autorizada. Contate o emissor do cartão.';
+                case 'rejected_high_risk':
+                    errorMessage = 'Pagamento rejeitado por segurança';
                     break;
                 default:
-                    if (apiError.description.includes('cartão')) {
-                        errorMessage = `Erro no cartão: ${apiError.description}`;
-                    }
-                    else {
-                        errorMessage = apiError.description;
-                    }
+                    errorMessage = apiError.description || 'Erro no processamento do pagamento';
             }
-            return res.status(statusCode).json({
+            return res.status(400).json({
                 error: errorMessage,
-                code: apiError.code,
-                details: error.response.data
+                code: apiError.code
             });
         }
-        return res.status(500).json({ error: 'Erro ao processar pagamento' });
+        return res.status(500).json({
+            error: 'Erro interno do servidor ao processar pagamento',
+            message: error.message
+        });
     }
 });
 exports.processCreditCardPayment = processCreditCardPayment;
-// Processar pagamento com cartão de débito
+// Processar pagamento com cartão de débito (similar ao crédito no Mercado Pago)
 const processDebitCardPayment = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     try {
         if (!req.user) {
             return res.status(401).json({ error: 'Usuário não autenticado' });
@@ -243,7 +229,7 @@ const processDebitCardPayment = (req, res) => __awaiter(void 0, void 0, void 0, 
                 details: validation.error.format()
             });
         }
-        const { orderId, debitCard, holderInfo, remoteIp } = validation.data;
+        const { orderId, debitCard, holderInfo, installments } = validation.data;
         // Validar CPF/CNPJ
         if (!(0, validation_1.validateDocument)(holderInfo.cpfCnpj)) {
             return res.status(400).json({
@@ -267,66 +253,57 @@ const processDebitCardPayment = (req, res) => __awaiter(void 0, void 0, void 0, 
         if (order.status !== 'PENDING') {
             return res.status(400).json({ error: 'Este pedido não está pendente de pagamento' });
         }
-        // Buscar ou criar cliente no Asaas
-        let customer;
-        // Se o pedido pertence a um usuário autenticado
-        if (order.userId && order.user) {
-            customer = yield asaas_service_1.default.findCustomerByEmail(order.user.email);
-            if (!customer) {
-                customer = yield asaas_service_1.default.createCustomer({
-                    name: order.user.name || holderInfo.name || 'Cliente',
-                    email: order.user.email,
-                    cpfCnpj: holderInfo.cpfCnpj,
-                    phone: holderInfo.phone,
-                    postalCode: holderInfo.postalCode,
-                    addressNumber: holderInfo.addressNumber,
-                    complement: holderInfo.addressComplement,
-                });
+        // Primeiro criar o token do cartão
+        const cardToken = yield mercadopago_service_1.default.createCardToken({
+            card_number: debitCard.number,
+            security_code: debitCard.ccv,
+            expiration_month: Number(debitCard.expiryMonth),
+            expiration_year: Number(debitCard.expiryYear),
+            cardholder: {
+                name: debitCard.holderName,
+                identification: {
+                    type: holderInfo.cpfCnpj.length === 11 ? 'CPF' : 'CNPJ',
+                    number: holderInfo.cpfCnpj
+                }
             }
-        }
-        else {
-            // Se for uma compra de convidado, usar as informações do titular
-            customer = yield asaas_service_1.default.createCustomer({
-                name: holderInfo.name,
-                email: holderInfo.email,
-                cpfCnpj: holderInfo.cpfCnpj,
-                phone: holderInfo.phone,
-                postalCode: holderInfo.postalCode,
-                addressNumber: holderInfo.addressNumber,
-                complement: holderInfo.addressComplement,
-            });
-        }
-        // Criar pagamento no Asaas
-        const payment = yield asaas_service_1.default.createPayment({
-            customer: customer.id,
-            billingType: 'DEBIT_CARD',
-            value: Number(order.total),
-            dueDate: new Date().toISOString().split('T')[0], // Data atual
+        });
+        // Preparar dados do pagador
+        const [firstName, ...lastNameParts] = holderInfo.name.split(' ');
+        const lastName = lastNameParts.join(' ') || '';
+        // Criar pagamento no Mercado Pago (débito = crédito com 1 parcela)
+        const payment = yield mercadopago_service_1.default.createPayment({
+            transaction_amount: Number(order.total),
+            token: cardToken,
             description: `Pedido #${order.id}`,
-            externalReference: String(order.id),
-            creditCard: {
-                holderName: debitCard.holderName,
-                number: debitCard.number,
-                expiryMonth: debitCard.expiryMonth,
-                expiryYear: debitCard.expiryYear,
-                ccv: debitCard.ccv,
+            installments: 1, // Débito sempre 1 parcela
+            payment_method_id: 'visa', // Será detectado automaticamente pelo token
+            payer: {
+                email: ((_a = order.user) === null || _a === void 0 ? void 0 : _a.email) || holderInfo.email,
+                first_name: firstName,
+                last_name: lastName,
+                identification: {
+                    type: holderInfo.cpfCnpj.length === 11 ? 'CPF' : 'CNPJ',
+                    number: holderInfo.cpfCnpj
+                },
+                phone: {
+                    area_code: holderInfo.phone.slice(0, 2),
+                    number: holderInfo.phone.slice(2)
+                },
+                address: {
+                    zip_code: holderInfo.postalCode,
+                    street_number: holderInfo.addressNumber
+                }
             },
-            creditCardHolderInfo: {
-                name: holderInfo.name,
-                email: holderInfo.email,
-                cpfCnpj: holderInfo.cpfCnpj,
-                postalCode: holderInfo.postalCode,
-                addressNumber: holderInfo.addressNumber,
-                addressComplement: holderInfo.addressComplement,
-                phone: holderInfo.phone,
-            },
-            remoteIp,
+            external_reference: String(order.id),
+            metadata: {
+                order_id: String(order.id)
+            }
         });
         // Atualizar o pedido com as informações de pagamento
         yield prisma_1.default.order.update({
             where: { id: orderId },
             data: {
-                status: asaas_service_1.default.mapAsaasStatusToOrderStatus(payment.status),
+                status: mercadopago_service_1.default.mapMercadoPagoStatusToOrderStatus(payment.status),
             }
         });
         return res.json({
@@ -334,391 +311,246 @@ const processDebitCardPayment = (req, res) => __awaiter(void 0, void 0, void 0, 
             payment: {
                 id: payment.id,
                 status: payment.status,
-                value: payment.value,
-                orderStatus: asaas_service_1.default.mapAsaasStatusToOrderStatus(payment.status),
+                status_detail: payment.status_detail,
+                transaction_amount: payment.transaction_amount,
+                orderStatus: mercadopago_service_1.default.mapMercadoPagoStatusToOrderStatus(payment.status),
             }
         });
     }
     catch (error) {
         console.error('Erro ao processar pagamento com cartão de débito:', error);
-        // Verificar se é um erro de resposta da API
-        if (((_c = (_b = (_a = error.response) === null || _a === void 0 ? void 0 : _a.data) === null || _b === void 0 ? void 0 : _b.errors) === null || _c === void 0 ? void 0 : _c.length) > 0) {
-            const apiError = error.response.data.errors[0];
-            let errorMessage = apiError.description || 'Erro ao processar pagamento';
-            let statusCode = 400;
-            // Mapear códigos de erro específicos do cartão
-            switch (apiError.code) {
-                case 'invalid_credit_card':
-                    errorMessage = 'Cartão inválido ou não autorizado pela operadora';
-                    break;
-                case 'expired_card':
-                    errorMessage = 'Cartão expirado';
-                    break;
-                case 'insufficient_funds':
-                    errorMessage = 'Saldo insuficiente no cartão';
-                    break;
-                case 'blocked_credit_card':
-                    errorMessage = 'Cartão bloqueado';
-                    break;
-                case 'canceled_credit_card':
-                    errorMessage = 'Cartão cancelado';
-                    break;
-                case 'unauthorized_credit_card':
-                    errorMessage = 'Transação não autorizada. Contate o emissor do cartão.';
-                    break;
-                default:
-                    if (apiError.description.includes('cartão')) {
-                        errorMessage = `Erro no cartão: ${apiError.description}`;
-                    }
-                    else {
-                        errorMessage = apiError.description;
-                    }
-            }
-            return res.status(statusCode).json({
-                error: errorMessage,
-                code: apiError.code,
-                details: error.response.data
-            });
-        }
-        return res.status(500).json({ error: 'Erro ao processar pagamento' });
-    }
-});
-exports.processDebitCardPayment = processDebitCardPayment;
-// Gerar link de pagamento (boleto/pix)
-const generatePaymentLink = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b;
-    try {
-        // Validar os dados de entrada com zod
-        const schema = zod_1.z.object({
-            orderId: zod_1.z.number().or(zod_1.z.string().transform(val => Number(val))), // Permite enviar como string ou número
-            billingType: zod_1.z.enum(['BOLETO', 'PIX']),
-            cpfCnpj: zod_1.z.string().optional(),
-            // Campos adicionais para usuários não autenticados
-            email: zod_1.z.string().email().optional(),
-            name: zod_1.z.string().optional(),
-        });
-        const validationResult = schema.safeParse(req.body);
-        if (!validationResult.success) {
-            console.error('Erro de validação:', validationResult.error);
+        if (((_d = (_c = (_b = error.response) === null || _b === void 0 ? void 0 : _b.data) === null || _c === void 0 ? void 0 : _c.cause) === null || _d === void 0 ? void 0 : _d.length) > 0) {
+            const apiError = error.response.data.cause[0];
             return res.status(400).json({
-                error: 'Dados inválidos',
-                details: validationResult.error.format()
+                error: apiError.description || 'Erro ao processar pagamento',
+                code: apiError.code
             });
         }
-        const { orderId: orderIdParam, billingType, cpfCnpj, email, name } = validationResult.data;
-        const orderIdNum = Number(orderIdParam);
-        // Validar CPF/CNPJ se fornecido
-        if (cpfCnpj) {
-            if (!(0, validation_1.validateDocument)(cpfCnpj)) {
-                return res.status(400).json({
-                    error: 'CPF/CNPJ inválido',
-                    message: 'O número de CPF/CNPJ fornecido não é válido'
-                });
-            }
-        }
-        // Verificar se o pedido existe
-        const order = yield prisma_1.default.order.findUnique({
-            where: {
-                id: orderIdNum
-            }
-        });
-        if (!order) {
-            return res.status(404).json({ error: 'Pedido não encontrado' });
-        }
-        // Verificação de permissão - pular para rotas guest
-        const isGuestRoute = req.path.includes('/guest/');
-        if (!isGuestRoute && req.user) {
-            // Para usuários autenticados, verificar se o pedido pertence ao usuário
-            if (order.userId !== req.user.id && req.user.role !== 'ADMIN') {
-                return res.status(403).json({ error: 'Você não tem permissão para acessar este pedido' });
-            }
-        }
-        // Se for rota de guest e não tiver os campos obrigatórios, retornar erro
-        if (isGuestRoute && (!email || !name || !cpfCnpj)) {
-            return res.status(400).json({
-                error: 'Dados incompletos',
-                message: 'Nome, email e CPF/CNPJ são obrigatórios para pagamentos sem login'
-            });
-        }
-        // IMPORTANTE: Verificar se já existe um pagamento para este pedido
-        try {
-            const existingPayments = yield asaas_service_1.default.getPaymentsByExternalReference(String(order.id));
-            // Filtrar pagamentos pelo tipo de cobrança (boleto ou pix)
-            const filteredPayments = existingPayments
-                .filter(p => p.billingType === billingType)
-                .filter(p => !['CANCELLED', 'REFUNDED'].includes(p.status)); // Ignorar cancelados/estornados
-            // Se já existe um pagamento deste tipo para o pedido, retornar ele em vez de criar um novo
-            if (filteredPayments.length > 0) {
-                console.log(`Pagamento existente encontrado para pedido #${order.id}, tipo ${billingType}`);
-                const existingPayment = filteredPayments[0]; // Pegar o mais recente
-                const responsePayment = {
-                    id: existingPayment.id,
-                    status: existingPayment.status,
-                    value: existingPayment.value,
-                    dueDate: existingPayment.dueDate,
-                    bankSlipUrl: existingPayment.bankSlipUrl,
-                    invoiceUrl: existingPayment.invoiceUrl,
-                    orderStatus: asaas_service_1.default.mapAsaasStatusToOrderStatus(existingPayment.status),
-                };
-                // Para pagamentos PIX, buscar os dados do QR code
-                if (billingType === 'PIX') {
-                    try {
-                        const pixInfo = yield asaas_service_1.default.getPixInfo(existingPayment.id);
-                        // Adicionar as informações do PIX à resposta
-                        Object.assign(responsePayment, {
-                            pixQrCode: pixInfo.payload,
-                            pixCodeQrCode: pixInfo.payload,
-                            pixEncodedImage: pixInfo.encodedImage,
-                            pixCodeBase64: pixInfo.encodedImage
-                        });
-                    }
-                    catch (pixError) {
-                        console.error('Erro ao buscar dados do PIX existente:', pixError);
-                    }
-                }
-                return res.json({
-                    success: true,
-                    payment: responsePayment,
-                    message: 'Pagamento existente recuperado com sucesso.'
-                });
-            }
-        }
-        catch (error) {
-            console.error('Erro ao verificar pagamentos existentes:', error);
-            // Continue normalmente se falhar esta verificação
-        }
-        // Buscar dados do cliente ou criar um novo
-        let customer;
-        try {
-            // Se o usuário estiver autenticado, buscar por ele
-            if (req.user) {
-                // Buscar usuário para obter dados atualizados
-                const user = yield prisma_1.default.user.findUnique({
-                    where: { id: req.user.id }
-                });
-                if (!user) {
-                    return res.status(404).json({ error: 'Usuário não encontrado' });
-                }
-                // Buscar cliente no Asaas pelo e-mail
-                const existingCustomer = yield asaas_service_1.default.findCustomerByEmail(user.email);
-                if (existingCustomer) {
-                    // Atualizar dados do cliente se necessário
-                    customer = existingCustomer;
-                }
-                else {
-                    // Criar novo cliente no Asaas
-                    customer = yield asaas_service_1.default.createCustomer({
-                        name: user.name || 'Cliente',
-                        email: user.email,
-                        cpfCnpj: cpfCnpj || '', // Usar o valor passado ou string vazia
-                        // Outros campos conforme necessário
-                    });
-                }
-            }
-            else {
-                // Para usuários não autenticados (guest), usar os dados da requisição
-                // Buscar cliente no Asaas pelo e-mail
-                const existingCustomer = yield asaas_service_1.default.findCustomerByEmail(email);
-                if (existingCustomer) {
-                    // Atualizar dados do cliente se necessário
-                    customer = existingCustomer;
-                }
-                else {
-                    // Criar novo cliente no Asaas
-                    customer = yield asaas_service_1.default.createCustomer({
-                        name: name,
-                        email: email,
-                        cpfCnpj: cpfCnpj || '',
-                        // Outros campos conforme necessário
-                    });
-                }
-            }
-        }
-        catch (error) {
-            console.error('Erro ao criar ou buscar cliente no Asaas:', error);
-            return res.status(500).json({
-                error: 'Erro ao processar cliente',
-                details: ((_a = error.response) === null || _a === void 0 ? void 0 : _a.data) || error.message
-            });
-        }
-        // Criar pagamento no Asaas
-        try {
-            const payment = yield asaas_service_1.default.createPayment({
-                customer: customer.id,
-                billingType,
-                value: Number(order.total), // O order.total já contém o desconto aplicado quando for PIX
-                dueDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 3 dias a partir de hoje
-                description: `Pedido #${order.id}`,
-                externalReference: String(order.id),
-            });
-            // Log da resposta da API para debug
-            console.log('Resposta da API Asaas para criação de pagamento:', JSON.stringify(payment, null, 2));
-            // Estruturar a resposta inicial
-            const responsePayment = {
-                id: payment.id,
-                status: payment.status,
-                value: payment.value,
-                dueDate: payment.dueDate,
-                bankSlipUrl: payment.bankSlipUrl,
-                invoiceUrl: payment.invoiceUrl,
-                orderStatus: asaas_service_1.default.mapAsaasStatusToOrderStatus(payment.status),
-            };
-            // Para pagamentos PIX, buscar os dados do QR code em uma chamada separada
-            if (billingType === 'PIX') {
-                try {
-                    const pixInfo = yield asaas_service_1.default.getPixInfo(payment.id);
-                    console.log('Informações do PIX obtidas:', pixInfo);
-                    // Adicionar as informações do PIX à resposta
-                    Object.assign(responsePayment, {
-                        pixQrCode: pixInfo.payload,
-                        pixCodeQrCode: pixInfo.payload,
-                        pixEncodedImage: pixInfo.encodedImage,
-                        pixCodeBase64: pixInfo.encodedImage
-                    });
-                }
-                catch (pixError) {
-                    console.error('Erro ao buscar dados do PIX:', pixError);
-                    // Continuar mesmo se falhar ao buscar os dados do PIX
-                }
-            }
-            return res.json({
-                success: true,
-                payment: responsePayment
-            });
-        }
-        catch (error) {
-            console.error('Erro ao gerar link de pagamento:', error);
-            return res.status(500).json({
-                error: 'Erro ao gerar link de pagamento',
-                details: ((_b = error.response) === null || _b === void 0 ? void 0 : _b.data) || error.message
-            });
-        }
-    }
-    catch (error) {
-        console.error('Erro ao gerar link de pagamento:', error);
         return res.status(500).json({
-            error: 'Erro ao gerar link de pagamento',
+            error: 'Erro interno do servidor ao processar pagamento',
             message: error.message
         });
     }
 });
-exports.generatePaymentLink = generatePaymentLink;
-// Verificar status do pagamento
-const checkPaymentStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+exports.processDebitCardPayment = processDebitCardPayment;
+// Gerar link de pagamento (usando preferência do Mercado Pago)
+const generatePaymentLink = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b, _c, _d, _e;
     try {
-        const { orderId } = req.params;
-        const orderIdNum = Number(orderId);
-        if (isNaN(orderIdNum)) {
-            return res.status(400).json({ error: 'ID de pedido inválido' });
+        if (!req.user) {
+            return res.status(401).json({ error: 'Usuário não autenticado' });
         }
-        // Buscar o pedido
-        const order = yield prisma_1.default.order.findUnique({
-            where: { id: orderIdNum },
-        });
-        if (!order) {
-            return res.status(404).json({ error: 'Pedido não encontrado' });
-        }
-        // Se usuário estiver autenticado, verificar se é o dono do pedido ou admin
-        if (req.user && order.userId !== null) {
-            if (order.userId !== req.user.id && req.user.role !== 'ADMIN') {
-                return res.status(403).json({ error: 'Acesso negado' });
-            }
-        }
-        try {
-            // Verificar se existe um pagamento no Asaas para este pedido 
-            // usando o externalReference que é o ID do pedido
-            const payments = yield asaas_service_1.default.getPaymentsByExternalReference(String(order.id));
-            if (!payments || payments.length === 0) {
-                // Se não encontrar pagamentos, retorna apenas o status do pedido
-                return res.json({
-                    orderId: order.id,
-                    status: order.status,
-                });
-            }
-            // Pegar o pagamento mais recente
-            const latestPayment = payments[0];
-            console.log('Status de pagamento do Asaas:', latestPayment);
-            // Mapear o status do Asaas para o status do pedido
-            const orderStatus = asaas_service_1.default.mapAsaasStatusToOrderStatus(latestPayment.status);
-            // Se o status mudou, atualizar no banco de dados
-            if (orderStatus !== order.status) {
-                yield prisma_1.default.order.update({
-                    where: { id: orderIdNum },
-                    data: {
-                        status: orderStatus,
-                    }
-                });
-            }
-            return res.json({
-                orderId: order.id,
-                status: orderStatus,
-                paymentStatus: latestPayment.status,
-                paymentInfo: {
-                    id: latestPayment.id,
-                    value: latestPayment.value,
-                    dueDate: latestPayment.dueDate,
-                    bankSlipUrl: latestPayment.bankSlipUrl,
-                    invoiceUrl: latestPayment.invoiceUrl
-                }
-            });
-        }
-        catch (error) {
-            console.error('Erro ao verificar status de pagamento no Asaas:', error);
-            // Em caso de erro, retorna o status atual do pedido
-            return res.json({
-                orderId: order.id,
-                status: order.status,
-                error: 'Não foi possível obter atualizações do status de pagamento'
-            });
-        }
-    }
-    catch (error) {
-        console.error('Erro ao verificar status do pedido:', error);
-        return res.status(500).json({ error: 'Erro ao verificar status do pedido' });
-    }
-});
-exports.checkPaymentStatus = checkPaymentStatus;
-// Webhook para receber notificações do Asaas
-const asaasWebhook = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const validation = webhookSchema.safeParse(req.body);
+        const validation = pixPaymentSchema.safeParse(req.body);
         if (!validation.success) {
             return res.status(400).json({
                 error: 'Dados inválidos',
                 details: validation.error.format()
             });
         }
-        const { event, payment } = validation.data;
-        // Ignorar eventos que não são de pagamento
-        if (!event.startsWith('PAYMENT_')) {
-            return res.json({ received: true });
-        }
-        // Obter o ID do pedido a partir do externalReference
-        const orderId = payment.externalReference ? Number(payment.externalReference) : null;
-        if (!orderId) {
-            return res.status(400).json({ error: 'Referência externa não encontrada' });
-        }
+        const { orderId, cpfCnpj } = validation.data;
         // Buscar o pedido
         const order = yield prisma_1.default.order.findUnique({
             where: { id: orderId },
+            include: {
+                user: true,
+                items: {
+                    include: {
+                        product: true
+                    }
+                }
+            }
         });
         if (!order) {
             return res.status(404).json({ error: 'Pedido não encontrado' });
         }
-        // Processar o webhook e obter o status mapeado
-        const result = asaas_service_1.default.processWebhook(req.body);
-        // Atualizar o status do pedido
+        // Verificar se o usuário é o dono do pedido
+        if (order.userId !== req.user.id) {
+            return res.status(403).json({ error: 'Acesso negado' });
+        }
+        // Verificar se o pedido já foi pago
+        if (order.status !== 'PENDING') {
+            return res.status(400).json({ error: 'Este pedido não está pendente de pagamento' });
+        }
+        // Preparar dados do pagador
+        const [firstName, ...lastNameParts] = (((_a = order.user) === null || _a === void 0 ? void 0 : _a.name) || 'Cliente').split(' ');
+        const lastName = lastNameParts.join(' ') || '';
+        // Criar preferência de pagamento PIX no Mercado Pago
+        const payment = yield mercadopago_service_1.default.createPixPayment({
+            transaction_amount: Number(order.total),
+            description: `Pedido #${order.id}`,
+            payment_method_id: 'pix',
+            payer: {
+                email: ((_b = order.user) === null || _b === void 0 ? void 0 : _b.email) || '',
+                first_name: firstName,
+                last_name: lastName,
+                identification: cpfCnpj ? {
+                    type: cpfCnpj.length === 11 ? 'CPF' : 'CNPJ',
+                    number: cpfCnpj
+                } : undefined
+            },
+            external_reference: String(order.id)
+        });
+        // Atualizar o pedido com as informações de pagamento
         yield prisma_1.default.order.update({
             where: { id: orderId },
             data: {
-                status: result.status,
+                status: mercadopago_service_1.default.mapMercadoPagoStatusToOrderStatus(payment.status),
             }
         });
-        return res.json({ success: true });
+        // Obter informações do PIX
+        const pixInfo = yield mercadopago_service_1.default.getPixInfo(String(payment.id));
+        return res.json({
+            success: true,
+            payment: {
+                id: payment.id,
+                status: payment.status,
+                status_detail: payment.status_detail,
+                transaction_amount: payment.transaction_amount,
+                orderStatus: mercadopago_service_1.default.mapMercadoPagoStatusToOrderStatus(payment.status),
+                pix: {
+                    qr_code: pixInfo.qrCode,
+                    qr_code_base64: pixInfo.qrCodeBase64
+                }
+            }
+        });
     }
     catch (error) {
-        console.error('Erro ao processar webhook do Asaas:', error);
-        return res.status(500).json({ error: 'Erro ao processar webhook' });
+        console.error('Erro ao gerar link de pagamento PIX:', error);
+        if (((_e = (_d = (_c = error.response) === null || _c === void 0 ? void 0 : _c.data) === null || _d === void 0 ? void 0 : _d.cause) === null || _e === void 0 ? void 0 : _e.length) > 0) {
+            const apiError = error.response.data.cause[0];
+            return res.status(400).json({
+                error: apiError.description || 'Erro ao gerar link de pagamento',
+                code: apiError.code
+            });
+        }
+        return res.status(500).json({
+            error: 'Erro interno do servidor ao gerar link de pagamento',
+            message: error.message
+        });
     }
 });
-exports.asaasWebhook = asaasWebhook;
+exports.generatePaymentLink = generatePaymentLink;
+// Verificar status de pagamento
+const checkPaymentStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        if (!req.user) {
+            return res.status(401).json({ error: 'Usuário não autenticado' });
+        }
+        const { orderId } = req.params;
+        if (!orderId) {
+            return res.status(400).json({ error: 'ID do pedido é obrigatório' });
+        }
+        // Buscar o pedido
+        const order = yield prisma_1.default.order.findUnique({
+            where: { id: Number(orderId) },
+            include: { user: true }
+        });
+        if (!order) {
+            return res.status(404).json({ error: 'Pedido não encontrado' });
+        }
+        // Verificar se o usuário é o dono do pedido
+        if (order.userId !== req.user.id) {
+            return res.status(403).json({ error: 'Acesso negado' });
+        }
+        // Verificar se existe um pagamento no Mercado Pago para este pedido
+        try {
+            const payments = yield mercadopago_service_1.default.getPaymentsByExternalReference(String(order.id));
+            if (payments.length === 0) {
+                return res.json({
+                    success: true,
+                    orderStatus: order.status,
+                    hasPayment: false,
+                    message: 'Nenhum pagamento encontrado para este pedido'
+                });
+            }
+            // Pegar o último pagamento (mais recente)
+            const latestPayment = payments[payments.length - 1];
+            console.log('Status de pagamento do Mercado Pago:', latestPayment);
+            // Mapear o status do Mercado Pago para o status do pedido
+            const orderStatus = mercadopago_service_1.default.mapMercadoPagoStatusToOrderStatus(latestPayment.status);
+            // Atualizar o status do pedido se necessário
+            if (order.status !== orderStatus) {
+                yield prisma_1.default.order.update({
+                    where: { id: order.id },
+                    data: { status: orderStatus }
+                });
+            }
+            return res.json({
+                success: true,
+                orderStatus,
+                hasPayment: true,
+                payment: {
+                    id: latestPayment.id,
+                    status: latestPayment.status,
+                    status_detail: latestPayment.status_detail,
+                    transaction_amount: latestPayment.transaction_amount,
+                    date_created: latestPayment.date_created,
+                    date_approved: latestPayment.date_approved
+                }
+            });
+        }
+        catch (error) {
+            console.error('Erro ao verificar status de pagamento no Mercado Pago:', error);
+            return res.status(500).json({
+                error: 'Erro ao verificar status de pagamento',
+                message: 'Não foi possível consultar o status do pagamento no momento'
+            });
+        }
+    }
+    catch (error) {
+        console.error('Erro ao verificar status de pagamento:', error);
+        return res.status(500).json({ error: 'Erro interno do servidor' });
+    }
+});
+exports.checkPaymentStatus = checkPaymentStatus;
+// Webhook para receber notificações do Mercado Pago
+const mercadoPagoWebhook = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        console.log('Webhook recebido do Mercado Pago:', req.body);
+        const validation = webhookSchema.safeParse(req.body);
+        if (!validation.success) {
+            console.error('Webhook inválido:', validation.error);
+            return res.status(400).json({ error: 'Dados do webhook inválidos' });
+        }
+        const { type, action, data } = validation.data;
+        // Verificar se é um webhook de pagamento
+        if (type !== 'payment') {
+            console.log('Webhook ignorado - não é de pagamento:', type);
+            return res.status(200).json({ received: true });
+        }
+        // Buscar detalhes do pagamento
+        const payment = yield mercadopago_service_1.default.getPaymentStatus(data.id);
+        if (!payment.external_reference) {
+            console.log('Pagamento sem referência externa:', payment.id);
+            return res.status(200).json({ received: true });
+        }
+        // Buscar o pedido pela referência externa
+        const order = yield prisma_1.default.order.findUnique({
+            where: { id: Number(payment.external_reference) }
+        });
+        if (!order) {
+            console.error('Pedido não encontrado para referência:', payment.external_reference);
+            return res.status(404).json({ error: 'Pedido não encontrado' });
+        }
+        // Atualizar o status do pedido
+        const newStatus = mercadopago_service_1.default.mapMercadoPagoStatusToOrderStatus(payment.status);
+        yield prisma_1.default.order.update({
+            where: { id: order.id },
+            data: { status: newStatus }
+        });
+        console.log(`Pedido ${order.id} atualizado para status: ${newStatus}`);
+        return res.status(200).json({
+            received: true,
+            processed: true,
+            orderId: order.id,
+            newStatus
+        });
+    }
+    catch (error) {
+        console.error('Erro ao processar webhook do Mercado Pago:', error);
+        return res.status(500).json({ error: 'Erro interno do servidor' });
+    }
+});
+exports.mercadoPagoWebhook = mercadoPagoWebhook;
+// Manter compatibilidade com nome antigo do webhook (para não quebrar integrações existentes)
+exports.asaasWebhook = exports.mercadoPagoWebhook;

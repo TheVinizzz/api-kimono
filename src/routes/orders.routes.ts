@@ -10,8 +10,10 @@ router.get('/:id', auth, ordersController.getOrderById);
 router.get('/:id/tracking', auth, ordersController.getOrderTracking);
 router.post('/', auth, ordersController.createOrder);
 
-// Rota para convidados (sem autenticação)
+// Rotas para convidados (sem autenticação)
 router.post('/guest', ordersController.createGuestOrder);
+router.get('/guest/:id', ordersController.getGuestOrderById);
+router.get('/guest/:id/status', ordersController.checkGuestOrderPaymentStatus);
 
 // Rotas de administrador
 router.get('/', auth, isAdmin, ordersController.getAllOrders);

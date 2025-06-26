@@ -80,3 +80,83 @@ export const isAdmin = (req: Request, res: Response, next: NextFunction): void =
 
   next();
 }; 
+
+// Middleware específico para pagamentos - AUTENTICAÇÃO OBRIGATÓRIA
+export const authRequired = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    // Verificar o header de autorização
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.error('❌ TENTATIVA DE PAGAMENTO SEM TOKEN:', {
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+        timestamp: new Date().toISOString()
+      });
+      
+      res.status(401).json({ 
+        error: 'ACESSO_NEGADO',
+        message: 'Token de autenticação obrigatório para pagamentos',
+        code: 'AUTH_TOKEN_REQUIRED'
+      });
+      return;
+    }
+
+    const token = authHeader.split(' ')[1];
+
+    // Verificar e decodificar o token
+    const decoded = jwt.verify(token, config.jwt.secret as string) as {
+      userId: number;
+      email: string;
+      role: string;
+    };
+
+    // Verificar se o usuário existe no banco
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      select: { id: true, email: true, role: true }
+    });
+
+    if (!user) {
+      console.error('❌ TENTATIVA DE PAGAMENTO COM USUÁRIO INEXISTENTE:', {
+        userId: decoded.userId,
+        email: decoded.email,
+        ip: req.ip,
+        timestamp: new Date().toISOString()
+      });
+      
+      res.status(401).json({ 
+        error: 'USUARIO_INVALIDO',
+        message: 'Usuário não encontrado. Faça login novamente.',
+        code: 'USER_NOT_FOUND'
+      });
+      return;
+    }
+
+    // Adicionar informações do usuário à requisição
+    req.user = {
+      id: user.id,
+      email: user.email,
+      role: user.role
+    };
+
+    console.log('✅ Usuário autenticado para pagamento:', {
+      userId: user.id,
+      email: user.email,
+      ip: req.ip
+    });
+
+    next();
+  } catch (error) {
+    console.error('❌ ERRO DE AUTENTICAÇÃO EM PAGAMENTO:', {
+      error: error instanceof Error ? error.message : 'Erro desconhecido',
+      ip: req.ip,
+      timestamp: new Date().toISOString()
+    });
+    
+    res.status(401).json({ 
+      error: 'TOKEN_INVALIDO',
+      message: 'Token inválido ou expirado',
+      code: 'INVALID_TOKEN'
+    });
+  }
+}; 

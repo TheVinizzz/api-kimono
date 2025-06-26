@@ -1,6 +1,7 @@
 import express, { ErrorRequestHandler } from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import path from 'path';
 import config from './config';
 import { Server } from 'http';
 
@@ -12,9 +13,14 @@ import ordersRoutes from './routes/orders.routes';
 import adminRoutes from './routes/admin.routes';
 import addressesRoutes from './routes/addresses.routes';
 import paymentRoutes from './routes/payment.routes';
+import mercadoPagoRoutes from './routes/mercadopago.routes';
 import analyticsRoutes from './routes/analytics.routes';
 import uploadRoutes from './routes/upload.routes';
 import productImagesRoutes from './routes/product-images.routes';
+import blingRoutes from './routes/bling.routes';
+import blingOAuthRoutes from './routes/bling-oauth.routes';
+import blingSyncRoutes from './routes/bling-sync.routes';
+import shippingRoutes from './routes/shipping.routes';
 
 // Inicializar o app
 const app = express();
@@ -36,6 +42,9 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
+
+// Servir arquivos estáticos (imagens de produtos)
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // Logging de requisições apenas em desenvolvimento
 if (process.env.NODE_ENV !== 'production') {
@@ -100,16 +109,6 @@ app.get('/', (_req, res) => {
   });
 });
 
-// FALLBACK: Responder OK para QUALQUER rota GET (debug)
-app.get('*', (req, res) => {
-  console.log(`🔍 Request GET catch-all: ${req.path}`);
-  res.status(200).json({ 
-    status: 'ok', 
-    path: req.path,
-    message: 'Kimono API catch-all' 
-  });
-});
-
 // Rotas da API
 app.use('/api/auth', authRoutes);
 app.use('/api/categories', categoriesRoutes);
@@ -118,9 +117,49 @@ app.use('/api/orders', ordersRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/user/addresses', addressesRoutes);
 app.use('/api/payment', paymentRoutes);
+app.use('/api/mercadopago', mercadoPagoRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/product-images', productImagesRoutes);
+app.use('/api/bling', blingRoutes);
+app.use('/api/bling-oauth', blingOAuthRoutes);
+app.use('/api/bling-sync', blingSyncRoutes);
+app.use('/api/shipping', shippingRoutes);
+
+// Health check da API
+app.get('/api/health', async (_req, res) => {
+  try {
+    // Importar prisma dinamicamente para evitar erros de inicialização
+    const { default: prisma } = await import('./config/prisma');
+    await prisma.$queryRaw`SELECT 1`;
+    
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      database: 'connected',
+      mercadopago: 'configured',
+      version: '1.0.0'
+    });
+  } catch (error) {
+    console.error('API Health check failed:', error);
+    res.status(500).json({
+      status: 'error',
+      timestamp: new Date().toISOString(),
+      database: 'disconnected',
+      error: 'Database connection failed'
+    });
+  }
+});
+
+// FALLBACK: Responder OK para QUALQUER rota GET não encontrada (debug)
+app.get('*', (req, res) => {
+  console.log(`🔍 Request GET catch-all: ${req.path}`);
+  res.status(200).json({ 
+    status: 'ok', 
+    path: req.path,
+    message: 'Kimono API catch-all' 
+  });
+});
 
 // Middleware para rotas não encontradas
 app.use((_req, res) => {

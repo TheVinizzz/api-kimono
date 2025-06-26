@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
+import mercadoPagoService from '../services/mercadopago.service';
 
 const prisma = new PrismaClient();
 
@@ -555,6 +556,65 @@ export const addShipmentUpdate = async (req: Request, res: Response) => {
   }
 };
 
+// Buscar pedido de convidado por ID
+export const getGuestOrderById = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const orderId = Number(id);
+    
+    if (isNaN(orderId)) {
+      return res.status(400).json({ error: 'ID inválido' });
+    }
+    
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+                imageUrl: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    
+    if (!order) {
+      return res.status(404).json({ error: 'Pedido não encontrado' });
+    }
+    
+    // Verificar se é um pedido de convidado (não tem userId)
+    if (order.userId !== null) {
+      return res.status(403).json({ error: 'Este pedido requer autenticação' });
+    }
+    
+    // Parse do endereço de entrega
+    let parsedShippingAddress = '';
+    if (order.shippingAddress) {
+      try {
+        const address = JSON.parse(order.shippingAddress);
+        parsedShippingAddress = `${address.street}, ${address.number}${address.complement ? `, ${address.complement}` : ''}, ${address.neighborhood}, ${address.city} - ${address.state}, CEP: ${address.zipCode}`;
+      } catch {
+        parsedShippingAddress = order.shippingAddress;
+      }
+    }
+    
+    const orderResponse = {
+      ...order,
+      shippingAddress: parsedShippingAddress,
+    };
+    
+    return res.json(orderResponse);
+  } catch (error) {
+    console.error('Erro ao buscar pedido de convidado:', error);
+    return res.status(500).json({ error: 'Erro ao buscar pedido' });
+  }
+};
+
 // Criar pedido para usuário não autenticado (guest)
 export const createGuestOrder = async (req: Request, res: Response) => {
   try {
@@ -647,5 +707,128 @@ export const createGuestOrder = async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Erro ao criar pedido de convidado:', error);
     return res.status(500).json({ error: 'Erro ao criar pedido' });
+  }
+};
+
+export const checkGuestOrderPaymentStatus = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({ error: 'ID do pedido é obrigatório' });
+    }
+
+    // Buscar o pedido
+    const order = await prisma.order.findUnique({
+      where: { 
+        id: Number(id),
+        userId: null // Garantir que é pedido de convidado
+      },
+      include: {
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+                imageUrl: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!order) {
+      return res.status(404).json({ error: 'Pedido não encontrado' });
+    }
+
+    // Verificar se é pagamento simulado
+    const isSimulatedPayment = order.paymentId?.startsWith('sim_');
+
+    // Verificar status do pagamento no Mercado Pago apenas se não for simulado
+    if (order.paymentId && !isSimulatedPayment) {
+      try {
+        const payment = await mercadoPagoService.getPaymentStatus(order.paymentId);
+        const newStatus = mercadoPagoService.mapMercadoPagoStatusToOrderStatus(payment.status);
+
+        // Atualizar status se mudou
+        if (order.status !== newStatus) {
+          await prisma.order.update({
+            where: { id: order.id },
+            data: { 
+              status: newStatus,
+              paymentStatus: payment.status === 'approved' ? 'PAID' : 'PENDING'
+            }
+          });
+
+          console.log(`🔄 Pedido ${order.id} atualizado: ${order.status} → ${newStatus}`);
+          
+          // Retornar dados atualizados
+          const updatedOrder = await prisma.order.findUnique({
+            where: { id: order.id },
+            include: {
+              items: {
+                include: {
+                  product: {
+                    select: {
+                      id: true,
+                      name: true,
+                      imageUrl: true
+                    }
+                  }
+                }
+              }
+            }
+          });
+
+          // Parse do endereço de forma segura
+          let parsedAddress = null;
+          if (updatedOrder?.shippingAddress) {
+            try {
+              parsedAddress = JSON.parse(updatedOrder.shippingAddress);
+            } catch {
+              // Se não é JSON válido, tratar como string simples
+              parsedAddress = { address: updatedOrder.shippingAddress };
+            }
+          }
+
+          return res.json({
+            ...updatedOrder,
+            address: parsedAddress,
+            statusChanged: true,
+            previousStatus: order.status,
+            newStatus: newStatus,
+            simulation: isSimulatedPayment
+          });
+        }
+      } catch (paymentError) {
+        console.error('Erro ao verificar pagamento:', paymentError);
+        // Continuar com o status atual se não conseguir verificar
+      }
+    }
+
+    // Parse do endereço de forma segura
+    let parsedAddress = null;
+    if (order.shippingAddress) {
+      try {
+        parsedAddress = JSON.parse(order.shippingAddress);
+      } catch {
+        // Se não é JSON válido, tratar como string simples
+        parsedAddress = { address: order.shippingAddress };
+      }
+    }
+
+    // Retornar pedido com status atual
+    res.json({
+      ...order,
+      address: parsedAddress,
+      statusChanged: false,
+      simulation: isSimulatedPayment
+    });
+
+  } catch (error) {
+    console.error('Erro ao verificar status do pedido:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
   }
 }; 

@@ -97,7 +97,7 @@ async function main() {
         price: 120.00,
         originalPrice: 160.00,
         stock: 20,
-        imageUrl: 'https://i.imgur.com/obi1.jpg',
+        imageUrl: 'https://via.placeholder.com/400x400/f8f9fa/6c757d?text=Kimono+Premium',
         categoryId: categoryAcessorios.id,
       },
     }),
@@ -232,7 +232,7 @@ async function main() {
       status: OrderStatus.IN_TRANSIT,
       total: 480.00,
       createdAt: datePedidoEmTransito,
-              updatedAt: datePedidoEmTransito,
+      updatedAt: datePedidoEmTransito,
       trackingNumber: 'JP987654321BR',
       shippingCarrier: 'Japan Express',
       estimatedDelivery: new Date(datePedidoEmTransito.getTime() + 15 * 24 * 60 * 60 * 1000), // 15 dias após criação

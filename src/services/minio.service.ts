@@ -94,8 +94,8 @@ export class MinioService {
   async downloadFile(fileName: string): Promise<Buffer> {
     try {
       const command = new GetObjectCommand({
-        Bucket: this.bucketName,
-        Key: fileName,
+          Bucket: this.bucketName,
+          Key: fileName,
       });
 
       const response = await this.s3Client.send(command);
@@ -125,8 +125,8 @@ export class MinioService {
   async deleteFile(fileName: string): Promise<void> {
     try {
       const command = new DeleteObjectCommand({
-        Bucket: this.bucketName,
-        Key: fileName,
+          Bucket: this.bucketName,
+          Key: fileName,
       });
 
       await this.s3Client.send(command);
