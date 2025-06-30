@@ -2,9 +2,6 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# Instalar PM2 globalmente
-RUN npm install -g pm2
-
 # Instalar dependências do sistema
 RUN apk add --no-cache python3 make g++
 
@@ -12,45 +9,26 @@ RUN apk add --no-cache python3 make g++
 COPY package*.json tsconfig.json ./
 
 # Instalar dependências
-RUN npm ci --silent
+RUN npm install
 
 # Copiar código fonte
 COPY . .
-
-# Instalar bcryptjs
-RUN npm uninstall bcrypt 2>/dev/null || true && npm install bcryptjs --silent
 
 # Gerar Prisma client
 RUN npx prisma generate
 
 # Compilar TypeScript
-RUN npx tsc
+RUN npm run build
 
-# Definir NODE_ENV como production
+# Instalar bcryptjs (substituto do bcrypt para Alpine)
+RUN npm uninstall bcrypt 2>/dev/null || true && npm install bcryptjs
+
+# Definir variáveis de ambiente
 ENV NODE_ENV=production
-
-# Remover devDependencies
-RUN npm prune --production
-
-# Criar arquivo de configuração do PM2
-RUN echo '{ \
-  "name": "kimono-api", \
-  "script": "dist/index.js", \
-  "instances": 1, \
-  "exec_mode": "fork", \
-  "max_memory_restart": "200M", \
-  "restart_delay": 1000, \
-  "max_restarts": 10, \
-  "kill_timeout": 5000, \
-  "wait_ready": true, \
-  "listen_timeout": 10000, \
-  "env": { \
-    "NODE_ENV": "production" \
-  } \
-}' > ecosystem.config.json
+ENV PORT=4000
 
 # Expor porta
 EXPOSE 4000
 
-# Usar PM2 para rodar a aplicação
-CMD ["pm2-runtime", "start", "ecosystem.config.json"] 
+# Comando para iniciar a aplicação
+CMD ["npm", "start"] 

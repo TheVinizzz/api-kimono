@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  kimono-api:
+    image: kimono-api:latest
+    container_name: kimono-api-test
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - DATABASE_URL=postgresql://postgres:password@db:5432/kimono_test
+      - JWT_SECRET=your-jwt-secret-key-here
+      - API_KEY=your-api-key-here
+      - MERCADOPAGO_ACCESS_TOKEN=your-mercadopago-token
+      - BLING_CLIENT_ID=your-bling-client-id
+      - BLING_CLIENT_SECRET=your-bling-client-secret
+      - AWS_ACCESS_KEY_ID=your-aws-key
+      - AWS_SECRET_ACCESS_KEY=your-aws-secret
+      - AWS_REGION=us-east-1
+      - AWS_BUCKET_NAME=your-bucket
+    depends_on:
+      - db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  db:
+    image: postgres:15-alpine
+    container_name: kimono-db-test
+    environment:
+      - POSTGRES_DB=kimono_test
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  postgres_data: 
