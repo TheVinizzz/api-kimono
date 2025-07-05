@@ -46,6 +46,19 @@ class ShippingService {
   }
 
   /**
+   * Busca CEP de origem das configurações do banco
+   */
+  private async getOriginZipCode(): Promise<string> {
+    try {
+      const { getOriginZipCode } = await import('../controllers/settings.controller');
+      return await getOriginZipCode();
+    } catch (error) {
+      console.error('Erro ao buscar CEP de origem:', error);
+      return this.CEP_ORIGEM_DEFAULT;
+    }
+  }
+
+  /**
    * Calcula o frete usando sistema híbrido com fallback
    */
   async calculateShipping(params: ShippingCalculationRequest): Promise<ShippingResponse> {
@@ -398,6 +411,9 @@ class ShippingService {
     valor: number,
     cepOrigem?: string
   ): Promise<ShippingResponse> {
+    // Buscar CEP de origem das configurações se não fornecido
+    const originZipCode = cepOrigem || await this.getOriginZipCode();
+    
     // Dimensões padrão para kimono (baseado em embalagem típica)
     const dimensoes = {
       comprimento: 30, // cm
@@ -407,7 +423,7 @@ class ShippingService {
     };
 
     return this.calculateShipping({
-      cepOrigem: cepOrigem || this.CEP_ORIGEM_DEFAULT,
+      cepOrigem: originZipCode,
       cepDestino,
       peso: Math.max(peso, 0.3), // peso mínimo de 300g
       formato: dimensoes.formato,

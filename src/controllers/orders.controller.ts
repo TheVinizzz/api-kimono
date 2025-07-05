@@ -198,17 +198,30 @@ export const createOrder = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Um ou mais produtos não existem' });
     }
     
-    // Verificar estoque
-    for (const item of items) {
-      const product = products.find(p => p.id === item.productId);
-      
-      if (!product || product.stock < item.quantity) {
-        return res.status(400).json({ 
-          error: 'Produto sem estoque suficiente', 
-          productId: item.productId 
-        });
-      }
+    // ✅ VERIFICAR ESTOQUE DISPONÍVEL (considerando reservas)
+    const stockCheck = await checkStockAvailability(
+      items.map(item => ({
+        productId: item.productId,
+        quantity: item.quantity,
+        variantId: undefined // Por enquanto, sem variantes nesta função
+      }))
+    );
+    
+    if (!stockCheck.allSufficient) {
+      const insufficientDetails = stockCheck.insufficientItems.map(item => ({
+        productId: item.productId,
+        requested: item.requested,
+        available: item.available
+      }));
+
+      return res.status(400).json({ 
+        error: 'Estoque insuficiente',
+        message: 'Um ou mais produtos não possuem estoque suficiente disponível',
+        details: insufficientDetails
+      });
     }
+    
+    console.log(`✅ Verificação de estoque aprovada para pedido do usuário ${userId}:`, stockCheck.stockChecks);
     
     // Calcular total do pedido
     const total = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
@@ -256,6 +269,366 @@ export const createOrder = async (req: Request, res: Response) => {
   }
 };
 
+// ==========================================
+// GESTÃO DE ESTOQUE - FUNÇÕES AUXILIARES
+// ==========================================
+
+/**
+ * Calcular estoque disponível considerando reservas (pedidos PENDING)
+ */
+const getAvailableStock = async (productId: number, variantId?: number) => {
+  try {
+    // Buscar produto ou variante
+    let totalStock = 0;
+    
+    if (variantId) {
+      const variant = await prisma.productVariant.findUnique({
+        where: { id: variantId }
+      });
+      totalStock = variant?.stock || 0;
+    } else {
+      const product = await prisma.product.findUnique({
+        where: { id: productId }
+      });
+      totalStock = product?.stock || 0;
+    }
+
+    // Calcular quantidade reservada (em pedidos PENDING)
+    const pendingOrders = await prisma.orderItem.findMany({
+      where: {
+        productId,
+        ...(variantId && { productVariantId: variantId }),
+        order: {
+          status: 'PENDING'
+        }
+      },
+      select: {
+        quantity: true
+      }
+    });
+
+    const reservedStock = pendingOrders.reduce((sum, item) => sum + item.quantity, 0);
+    const availableStock = Math.max(0, totalStock - reservedStock);
+
+    return {
+      totalStock,
+      reservedStock,
+      availableStock
+    };
+  } catch (error) {
+    console.error('❌ Erro ao calcular estoque disponível:', error);
+    return {
+      totalStock: 0,
+      reservedStock: 0,
+      availableStock: 0
+    };
+  }
+};
+
+/**
+ * Verificar se há estoque suficiente para todos os itens do pedido
+ */
+const checkStockAvailability = async (items: Array<{productId: number, quantity: number, variantId?: number}>) => {
+  const stockChecks: Array<{
+    productId: number;
+    variantId?: number;
+    requested: number;
+    available: number;
+    sufficient: boolean;
+  }> = [];
+
+  for (const item of items) {
+    const stockInfo = await getAvailableStock(item.productId, item.variantId);
+    
+    stockChecks.push({
+      productId: item.productId,
+      variantId: item.variantId,
+      requested: item.quantity,
+      available: stockInfo.availableStock,
+      sufficient: stockInfo.availableStock >= item.quantity
+    });
+  }
+
+  const allSufficient = stockChecks.every(check => check.sufficient);
+  const insufficientItems = stockChecks.filter(check => !check.sufficient);
+
+  return {
+    allSufficient,
+    stockChecks,
+    insufficientItems
+  };
+};
+
+/**
+ * Confirmar estoque - remove definitivamente do estoque quando pagamento é confirmado
+ */
+const confirmStockReservation = async (orderId: number) => {
+  try {
+    console.log(`✅ Confirmando reserva de estoque para pedido ${orderId}`);
+    
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        items: true
+      }
+    });
+
+    if (!order) {
+      console.error(`❌ Pedido ${orderId} não encontrado para confirmação de estoque`);
+      return false;
+    }
+
+    // Se o pedido já foi PAID, o estoque já deve ter sido confirmado
+    // Esta função é mais para casos onde queremos confirmar explicitamente
+    console.log(`📦 Estoque do pedido ${orderId} já foi processado durante a criação`);
+    return true;
+
+  } catch (error) {
+    console.error(`❌ Erro ao confirmar estoque do pedido ${orderId}:`, error);
+    return false;
+  }
+};
+
+/**
+ * Restaurar estoque quando pedido é cancelado
+ */
+const restoreStockFromOrder = async (orderId: number) => {
+  try {
+    console.log(`🔄 Iniciando restauração de estoque para pedido ${orderId}`);
+    
+    // Buscar pedido com itens
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        items: {
+          include: {
+            product: true,
+            productVariant: true
+          }
+        }
+      }
+    });
+
+    if (!order) {
+      console.error(`❌ Pedido ${orderId} não encontrado para restauração de estoque`);
+      return false;
+    }
+
+    if (order.status !== 'CANCELED') {
+      console.warn(`⚠️ Tentativa de restaurar estoque para pedido ${orderId} com status ${order.status}`);
+      return false;
+    }
+
+    // Restaurar estoque usando transação
+    await prisma.$transaction(async (tx) => {
+      for (const item of order.items) {
+        if (item.productVariantId && item.productVariant) {
+          // Restaurar estoque da variante
+          await tx.productVariant.update({
+            where: { id: item.productVariantId },
+            data: {
+              stock: {
+                increment: item.quantity
+              }
+            }
+          });
+          console.log(`✅ Estoque da variante ${item.productVariantId} restaurado: +${item.quantity}`);
+        } else {
+          // Restaurar estoque do produto principal
+          await tx.product.update({
+            where: { id: item.productId },
+            data: {
+              stock: {
+                increment: item.quantity
+              }
+            }
+          });
+          console.log(`✅ Estoque do produto ${item.productId} restaurado: +${item.quantity}`);
+        }
+      }
+
+      // Marcar que o estoque foi restaurado para evitar duplicações
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          // Adicionar campo de controle se existir no schema
+          updatedAt: new Date()
+        }
+      });
+    });
+
+    console.log(`✅ Estoque restaurado com sucesso para pedido ${orderId}`);
+    return true;
+
+  } catch (error) {
+    console.error(`❌ Erro ao restaurar estoque do pedido ${orderId}:`, error);
+    return false;
+  }
+};
+
+/**
+ * Verificar se pedido pode ter estoque restaurado
+ */
+const canRestoreStock = (currentStatus: string, newStatus: string): boolean => {
+  // Só restaurar estoque se:
+  // 1. Status atual não for CANCELED
+  // 2. Novo status for CANCELED
+  // 3. Status atual for PENDING (não pagos ainda)
+  
+  const allowedCurrentStatuses = ['PENDING', 'PAID']; // Permitir restaurar mesmo pedidos já pagos se cancelados
+  const restoreStatuses = ['CANCELED'];
+  
+  return allowedCurrentStatuses.includes(currentStatus) && restoreStatuses.includes(newStatus);
+};
+
+/**
+ * Cancelar pedidos expirados e restaurar estoque
+ * Cancela pedidos PENDING que estão há mais de X horas sem pagamento
+ */
+export const cancelExpiredOrders = async (req: Request, res: Response) => {
+  try {
+    const { dryRun = 'false', hoursLimit = '24' } = req.query;
+    const isDryRun = dryRun === 'true';
+    const expirationHours = parseInt(hoursLimit as string) || 24;
+    
+    console.log(`🔍 Buscando pedidos expirados (${expirationHours}h) - ${isDryRun ? 'DRY RUN' : 'EXECUTAR'}`);
+    
+    // Calcular data limite (pedidos mais antigos que X horas)
+    const expirationDate = new Date();
+    expirationDate.setHours(expirationDate.getHours() - expirationHours);
+    
+    // Buscar pedidos PENDING expirados
+    const expiredOrders = await prisma.order.findMany({
+      where: {
+        status: 'PENDING',
+        createdAt: {
+          lt: expirationDate
+        }
+      },
+      include: {
+        items: {
+          include: {
+            product: {
+              select: { id: true, name: true }
+            },
+            productVariant: {
+              select: { id: true, size: true }
+            }
+          }
+        }
+      }
+    });
+
+    console.log(`📊 Encontrados ${expiredOrders.length} pedidos expirados`);
+
+    if (expiredOrders.length === 0) {
+      return res.json({
+        success: true,
+        message: 'Nenhum pedido expirado encontrado',
+        processed: 0,
+        dryRun: isDryRun
+      });
+    }
+
+    let processedCount = 0;
+    const results: any[] = [];
+
+    if (!isDryRun) {
+      // Processar cada pedido expirado
+      for (const order of expiredOrders) {
+        try {
+          await prisma.$transaction(async (tx) => {
+            // 1. Atualizar status para CANCELED
+            await tx.order.update({
+              where: { id: order.id },
+              data: { 
+                status: 'CANCELED',
+                updatedAt: new Date()
+              }
+            });
+
+            // 2. Restaurar estoque
+            for (const item of order.items) {
+              if (item.productVariantId) {
+                // Restaurar estoque da variante
+                await tx.productVariant.update({
+                  where: { id: item.productVariantId },
+                  data: {
+                    stock: {
+                      increment: item.quantity
+                    }
+                  }
+                });
+              } else {
+                // Restaurar estoque do produto principal
+                await tx.product.update({
+                  where: { id: item.productId },
+                  data: {
+                    stock: {
+                      increment: item.quantity
+                    }
+                  }
+                });
+              }
+            }
+          });
+
+          processedCount++;
+          results.push({
+            orderId: order.id,
+            customerEmail: order.customerEmail || 'N/A',
+            total: order.total,
+            itemsCount: order.items.length,
+            status: 'processed'
+          });
+
+          console.log(`✅ Pedido ${order.id} cancelado e estoque restaurado`);
+
+        } catch (error) {
+          console.error(`❌ Erro ao processar pedido ${order.id}:`, error);
+          results.push({
+            orderId: order.id,
+            status: 'error',
+            error: error instanceof Error ? error.message : 'Erro desconhecido'
+          });
+        }
+      }
+    } else {
+      // Modo DRY RUN - apenas listar o que seria processado
+      for (const order of expiredOrders) {
+        results.push({
+          orderId: order.id,
+          customerEmail: order.customerEmail || 'N/A',
+          total: order.total,
+          createdAt: order.createdAt,
+          itemsCount: order.items.length,
+          status: 'would_be_cancelled'
+        });
+      }
+      processedCount = expiredOrders.length;
+    }
+
+    return res.json({
+      success: true,
+      message: isDryRun 
+        ? `${expiredOrders.length} pedidos seriam cancelados` 
+        : `${processedCount} pedidos cancelados e estoque restaurado`,
+      processed: processedCount,
+      total: expiredOrders.length,
+      expirationHours,
+      dryRun: isDryRun,
+      results
+    });
+
+  } catch (error) {
+    console.error('❌ Erro ao cancelar pedidos expirados:', error);
+    return res.status(500).json({ 
+      error: 'Erro ao processar pedidos expirados',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+};
+
 // Atualizar status do pedido (admin)
 export const updateOrderStatus = async (req: Request, res: Response) => {
   try {
@@ -278,14 +651,25 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
     const { status } = validation.data;
     
     // Verificar se o pedido existe
-    const orderExists = await prisma.order.findUnique({
+    const currentOrder = await prisma.order.findUnique({
       where: { id: orderId },
+      include: {
+        items: true
+      }
     });
     
-    if (!orderExists) {
+    if (!currentOrder) {
       return res.status(404).json({ error: 'Pedido não encontrado' });
     }
+
+    // ✅ LÓGICA DE RESTAURAÇÃO DE ESTOQUE
+    const shouldRestoreStock = canRestoreStock(currentOrder.status, status);
     
+    if (shouldRestoreStock) {
+      console.log(`🔄 Pedido ${orderId}: ${currentOrder.status} → ${status} - Restaurando estoque`);
+    }
+    
+    // Atualizar status do pedido
     const updatedOrder = await prisma.order.update({
       where: { id: orderId },
       data: { status },
@@ -293,8 +677,20 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
         items: true,
       },
     });
+
+    // ✅ RESTAURAR ESTOQUE SE NECESSÁRIO (após atualizar status)
+    if (shouldRestoreStock) {
+      const restored = await restoreStockFromOrder(orderId);
+      if (!restored) {
+        console.error(`❌ Falha ao restaurar estoque do pedido ${orderId}`);
+        // Não falhar a operação, apenas registrar o erro
+      }
+    }
     
-    return res.json(updatedOrder);
+    return res.json({
+      ...updatedOrder,
+      stockRestored: shouldRestoreStock
+    });
   } catch (error) {
     console.error('Erro ao atualizar status do pedido:', error);
     return res.status(500).json({ error: 'Erro ao atualizar status do pedido' });
@@ -320,14 +716,25 @@ export const adminUpdateOrderStatus = async (req: Request, res: Response) => {
     const { orderId, status } = validation.data;
     
     // Verificar se o pedido existe
-    const orderExists = await prisma.order.findUnique({
+    const currentOrder = await prisma.order.findUnique({
       where: { id: orderId },
+      include: {
+        items: true
+      }
     });
     
-    if (!orderExists) {
+    if (!currentOrder) {
       return res.status(404).json({ error: 'Pedido não encontrado' });
     }
+
+    // ✅ LÓGICA DE RESTAURAÇÃO DE ESTOQUE PARA ADMIN
+    const shouldRestoreStock = canRestoreStock(currentOrder.status, status);
     
+    if (shouldRestoreStock) {
+      console.log(`🔄 [ADMIN] Pedido ${orderId}: ${currentOrder.status} → ${status} - Restaurando estoque`);
+    }
+    
+    // Atualizar status do pedido
     const updatedOrder = await prisma.order.update({
       where: { id: orderId },
       data: { status },
@@ -342,8 +749,20 @@ export const adminUpdateOrderStatus = async (req: Request, res: Response) => {
         items: true,
       },
     });
+
+    // ✅ RESTAURAR ESTOQUE SE NECESSÁRIO (após atualizar status)
+    if (shouldRestoreStock) {
+      const restored = await restoreStockFromOrder(orderId);
+      if (!restored) {
+        console.error(`❌ [ADMIN] Falha ao restaurar estoque do pedido ${orderId}`);
+        // Não falhar a operação, apenas registrar o erro
+      }
+    }
     
-    return res.json(updatedOrder);
+    return res.json({
+      ...updatedOrder,
+      stockRestored: shouldRestoreStock
+    });
   } catch (error) {
     console.error('Erro ao atualizar status do pedido:', error);
     return res.status(500).json({ error: 'Erro ao atualizar status do pedido' });
@@ -645,17 +1064,30 @@ export const createGuestOrder = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Um ou mais produtos não existem' });
     }
     
-    // Verificar estoque
-    for (const item of items) {
-      const product = products.find(p => p.id === item.productId);
-      
-      if (!product || product.stock < item.quantity) {
-        return res.status(400).json({ 
-          error: 'Produto sem estoque suficiente', 
-          productId: item.productId 
-        });
-      }
+    // ✅ VERIFICAR ESTOQUE DISPONÍVEL (considerando reservas) - GUEST ORDER
+    const stockCheck = await checkStockAvailability(
+      items.map(item => ({
+        productId: item.productId,
+        quantity: item.quantity,
+        variantId: undefined // Por enquanto, sem variantes nesta função
+      }))
+    );
+    
+    if (!stockCheck.allSufficient) {
+      const insufficientDetails = stockCheck.insufficientItems.map(item => ({
+        productId: item.productId,
+        requested: item.requested,
+        available: item.available
+      }));
+
+      return res.status(400).json({ 
+        error: 'Estoque insuficiente',
+        message: 'Um ou mais produtos não possuem estoque suficiente disponível',
+        details: insufficientDetails
+      });
     }
+    
+    console.log(`✅ Verificação de estoque aprovada para pedido guest:`, stockCheck.stockChecks);
     
     // Calcular total do pedido
     const calculatedTotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
@@ -764,6 +1196,17 @@ export const checkGuestOrderPaymentStatus = async (req: Request, res: Response) 
 
           console.log(`🔄 Pedido ${order.id} atualizado: ${order.status} → ${newStatus}`);
           
+          // ✅ REDUZIR ESTOQUE SE PAGAMENTO FOI APROVADO AGORA
+          if (newStatus === 'PAID' && order.status !== 'PAID') {
+            console.log('🎉 Pagamento guest aprovado - reduzindo estoque:', order.id);
+            try {
+              await reduceStockOnPaymentApproved(order.id);
+              console.log(`📦 Estoque reduzido automaticamente para pedido guest ${order.id}`);
+            } catch (stockError) {
+              console.error(`❌ Erro ao reduzir estoque do pedido guest ${order.id}:`, stockError);
+            }
+          }
+          
           // Retornar dados atualizados
           const updatedOrder = await prisma.order.findUnique({
             where: { id: order.id },
@@ -831,4 +1274,244 @@ export const checkGuestOrderPaymentStatus = async (req: Request, res: Response) 
     console.error('Erro ao verificar status do pedido:', error);
     res.status(500).json({ error: 'Erro interno do servidor' });
   }
-}; 
+};
+
+/**
+ * ✅ NOVA FUNCIONALIDADE: Obter informações de estoque em tempo real
+ * Endpoint para verificar disponibilidade de estoque considerando reservas
+ */
+export const getStockInfo = async (req: Request, res: Response) => {
+  try {
+    const { productIds, variantIds } = req.query;
+    
+    if (!productIds && !variantIds) {
+      return res.status(400).json({
+        error: 'Parâmetros obrigatórios',
+        message: 'Informe productIds ou variantIds para consulta'
+      });
+    }
+
+    const stockInfo: Array<{
+      productId: number;
+      variantId?: number;
+      totalStock: number;
+      reservedStock: number;
+      availableStock: number;
+      status: 'available' | 'low_stock' | 'out_of_stock';
+    }> = [];
+
+    // Processar produtos se informados
+    if (productIds) {
+      const ids = (productIds as string).split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+      
+      for (const productId of ids) {
+        const stockData = await getAvailableStock(productId);
+        
+        let status: 'available' | 'low_stock' | 'out_of_stock' = 'available';
+        if (stockData.availableStock === 0) {
+          status = 'out_of_stock';
+        } else if (stockData.availableStock <= 5) { // Estoque baixo quando <= 5 unidades
+          status = 'low_stock';
+        }
+
+        stockInfo.push({
+          productId,
+          ...stockData,
+          status
+        });
+      }
+    }
+
+    // Processar variantes se informadas
+    if (variantIds) {
+      const ids = (variantIds as string).split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+      
+      for (const variantId of ids) {
+        // Buscar produto da variante
+        const variant = await prisma.productVariant.findUnique({
+          where: { id: variantId },
+          select: { productId: true }
+        });
+
+        if (variant) {
+          const stockData = await getAvailableStock(variant.productId, variantId);
+          
+          let status: 'available' | 'low_stock' | 'out_of_stock' = 'available';
+          if (stockData.availableStock === 0) {
+            status = 'out_of_stock';
+          } else if (stockData.availableStock <= 5) {
+            status = 'low_stock';
+          }
+
+          stockInfo.push({
+            productId: variant.productId,
+            variantId,
+            ...stockData,
+            status
+          });
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      stockInfo
+    });
+
+  } catch (error) {
+    console.error('❌ Erro ao obter informações de estoque:', error);
+    return res.status(500).json({
+      error: 'Erro ao consultar estoque',
+      message: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+};
+
+/**
+ * ✅ REDUZIR ESTOQUE AUTOMATICAMENTE - PAGAMENTO APROVADO
+ * Função chamada quando um pedido é aprovado para reduzir o estoque
+ */
+const reduceStockOnPaymentApproved = async (orderId: number) => {
+  try {
+    console.log(`📦 REDUZINDO ESTOQUE: Pedido ${orderId} foi aprovado`);
+
+    // 1. Buscar pedido com itens
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+                stock: true
+              }
+            },
+            productVariant: {
+              select: {
+                id: true,
+                stock: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!order) {
+      throw new Error(`Pedido ${orderId} não encontrado`);
+    }
+
+    if (order.status !== 'PAID') {
+      console.log(`⚠️ Pedido ${orderId} não está marcado como PAID. Status: ${order.status}`);
+      return;
+    }
+
+    // 2. Processar cada item do pedido
+    const stockUpdates: Array<{
+      productId: number;
+      productName: string;
+      quantity: number;
+      previousStock: number;
+      newStock: number;
+      variantId?: number;
+    }> = [];
+
+    for (const item of order.items) {
+      console.log(`📦 Processando item: ${item.product.name} (Qtd: ${item.quantity})`);
+
+      if (item.productVariantId && item.productVariant) {
+        // ✅ PRODUTO COM VARIANTE
+        const currentStock = item.productVariant.stock || 0;
+        const newStock = Math.max(0, currentStock - item.quantity);
+
+        await prisma.productVariant.update({
+          where: { id: item.productVariantId },
+          data: { stock: newStock }
+        });
+
+        stockUpdates.push({
+          productId: item.productId,
+          productName: item.product.name,
+          quantity: item.quantity,
+          previousStock: currentStock,
+          newStock: newStock,
+          variantId: item.productVariantId
+        });
+
+        console.log(`✅ Estoque variante ${item.productVariantId}: ${currentStock} → ${newStock}`);
+      } else {
+        // ✅ PRODUTO SEM VARIANTE
+        const currentStock = item.product.stock || 0;
+        const newStock = Math.max(0, currentStock - item.quantity);
+
+        await prisma.product.update({
+          where: { id: item.productId },
+          data: { stock: newStock }
+        });
+
+        stockUpdates.push({
+          productId: item.productId,
+          productName: item.product.name,
+          quantity: item.quantity,
+          previousStock: currentStock,
+          newStock: newStock
+        });
+
+        console.log(`✅ Estoque produto ${item.productId}: ${currentStock} → ${newStock}`);
+      }
+    }
+
+    // 3. Log final da operação
+    console.log(`✅ ESTOQUE REDUZIDO: Pedido ${orderId}`, {
+      totalItems: stockUpdates.length,
+      updates: stockUpdates
+    });
+
+    return {
+      success: true,
+      orderId: orderId,
+      stockUpdates: stockUpdates
+    };
+
+  } catch (error) {
+    console.error(`❌ ERRO ao reduzir estoque do pedido ${orderId}:`, error);
+    throw error;
+  }
+};
+
+/**
+ * ✅ ENDPOINT PARA TESTAR REDUÇÃO DE ESTOQUE
+ * Endpoint administrativo para testar a redução manual de estoque
+ */
+export const testReduceStock = async (req: Request, res: Response) => {
+  try {
+    const { orderId } = req.params;
+    
+    if (!orderId || isNaN(Number(orderId))) {
+      return res.status(400).json({
+        error: 'ID do pedido inválido'
+      });
+    }
+
+    const result = await reduceStockOnPaymentApproved(Number(orderId));
+    
+    return res.json({
+      success: true,
+      message: 'Estoque reduzido com sucesso',
+      result
+    });
+
+  } catch (error: any) {
+    console.error('Erro ao testar redução de estoque:', error);
+    return res.status(500).json({
+      error: 'Erro ao reduzir estoque',
+      message: error.message
+    });
+  }
+};
+
+// ✅ EXPORTAR FUNÇÃO PARA USO EM OUTROS MÓDULOS
+export { reduceStockOnPaymentApproved }; 

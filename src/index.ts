@@ -8,6 +8,7 @@ import { Server } from 'http';
 // Importar rotas
 import authRoutes from './routes/auth.routes';
 import categoriesRoutes from './routes/categories.routes';
+import brandsRoutes from './routes/brands.routes';
 import productsRoutes from './routes/products.routes';
 import ordersRoutes from './routes/orders.routes';
 import adminRoutes from './routes/admin.routes';
@@ -21,6 +22,9 @@ import blingRoutes from './routes/bling.routes';
 import blingOAuthRoutes from './routes/bling-oauth.routes';
 import blingSyncRoutes from './routes/bling-sync.routes';
 import shippingRoutes from './routes/shipping.routes';
+import shippingLabelsRoutes from './routes/shipping-labels.routes';
+import correiosRoutes from './routes/correios.routes';
+import settingsRoutes from './routes/settings.routes';
 
 // Inicializar o app
 const app = express();
@@ -112,6 +116,7 @@ app.get('/', (_req, res) => {
 // Rotas da API
 app.use('/api/auth', authRoutes);
 app.use('/api/categories', categoriesRoutes);
+app.use('/api/brands', brandsRoutes);
 app.use('/api/products', productsRoutes);
 app.use('/api/orders', ordersRoutes);
 app.use('/api/admin', adminRoutes);
@@ -125,6 +130,9 @@ app.use('/api/bling', blingRoutes);
 app.use('/api/bling-oauth', blingOAuthRoutes);
 app.use('/api/bling-sync', blingSyncRoutes);
 app.use('/api/shipping', shippingRoutes);
+app.use('/api/shipping-labels', shippingLabelsRoutes);
+app.use('/api/correios', correiosRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Health check da API
 app.get('/api/health', async (_req, res) => {

@@ -17,18 +17,24 @@ model Product {
   blingId       BigInt?        @unique
   sku           String?        @unique
   ncm           String?
-  weight        Float?
+  weight        Float          @default(0.5)    // Peso em kg - obrigatório para cálculo de frete
+  height        Float          @default(5.0)    // Altura em cm
+  width         Float          @default(25.0)   // Largura em cm  
+  length        Float          @default(30.0)   // Comprimento em cm
   gtin          String?
   imageUrl      String?        // Mantém por compatibilidade, será a imagem principal
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   categoryId    Int?
+  brandId       Int?
   orderItems    OrderItem[]
   images        ProductImage[] // Nova relação para múltiplas imagens
   variants      ProductVariant[] // Nova relação para variações de tamanho/preço
   category      Category?      @relation(fields: [categoryId], references: [id])
+  brand         Brand?         @relation(fields: [brandId], references: [id])
 
   @@index([categoryId])
+  @@index([brandId])
 }
 
 model ProductImage {
@@ -51,6 +57,7 @@ model ProductVariant {
   price      Decimal @db.Decimal(10, 2)
   stock      Int     @default(0)
   sku        String? // Código único da variação
+  weight     Float?  // Peso específico da variação em kg (opcional - usa peso do produto se não informado)
   isActive   Boolean @default(true)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -63,6 +70,16 @@ model ProductVariant {
 }
 
 model Category {
+  id          Int       @id @default(autoincrement())
+  name        String    @unique
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  imageUrl    String?
+  products    Product[]
+}
+
+model Brand {
   id          Int       @id @default(autoincrement())
   name        String    @unique
   description String?
@@ -104,6 +121,8 @@ model Order {
   customerPhone     String?
   customerDocument  String?          // CPF/CNPJ do cliente
   shippingAddress   String?
+  labelPrinted      Boolean          @default(false) // Indica se a etiqueta de envio foi impressa
+  labelPrintedAt    DateTime?        // Data/hora da impressão da etiqueta
   user              User?            @relation(fields: [userId], references: [id])
   items             OrderItem[]
   trackingUpdates   ShipmentUpdate[]
@@ -111,6 +130,7 @@ model Order {
   @@index([userId])
   @@index([paymentId])
   @@index([customerEmail])
+  @@index([labelPrinted])
 }
 
 model OrderItem {
@@ -181,6 +201,19 @@ model PageVisit {
   @@index([timestamp])
   @@index([userId])
   @@index([sessionId])
+}
+
+model AppSettings {
+  id                Int      @id @default(autoincrement())
+  key               String   @unique
+  value             String
+  description       String?
+  category          String   @default("general")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([category])
+  @@index([key])
 }
 
 enum UserRole {

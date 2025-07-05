@@ -7,6 +7,7 @@ import { validateDocument } from '../utils/validation';
 import { orderService } from '../services/order.service';
 import emailService from '../services/email.service';
 import { validateCPFForMercadoPago, formatPhoneForMercadoPago, generateExternalReference, processMercadoPagoError } from '../utils/mercadopago-errors';
+import { reduceStockOnPaymentApproved } from './orders.controller';
 
 // Schema para validação de pagamento com cartão de crédito
 const creditCardPaymentSchema = z.object({
@@ -699,6 +700,17 @@ export const checkPaymentStatus = async (req: Request, res: Response) => {
         });
 
         console.log(`✅ Status verificado e atualizado - Pedido ${order.id}: ${order.status} → ${orderStatus}, Payment: ${order.paymentStatus} → ${newPaymentStatus}`);
+        
+        // ✅ REDUZIR ESTOQUE SE PAGAMENTO FOI APROVADO AGORA
+        if (orderStatus === 'PAID' && order.status !== 'PAID') {
+          console.log('🎉 Pagamento aprovado via verificação - reduzindo estoque:', order.id);
+          try {
+            await reduceStockOnPaymentApproved(order.id);
+            console.log(`📦 Estoque reduzido automaticamente via verificação para o pedido ${order.id}`);
+          } catch (stockError) {
+            console.error(`❌ Erro ao reduzir estoque via verificação do pedido ${order.id}:`, stockError);
+          }
+        }
       }
 
       // Preparar informações do pagamento para retorno
@@ -848,6 +860,17 @@ export const mercadoPagoWebhook = async (req: Request, res: Response) => {
       });
 
       console.log(`✅ Pedido ${order.id} atualizado: ${order.status} → ${newStatus}, Payment: ${order.paymentStatus} → ${newPaymentStatus}`);
+      
+      // ✅ REDUZIR ESTOQUE SE PAGAMENTO FOI APROVADO AGORA
+      if (newStatus === 'PAID' && order.status !== 'PAID') {
+        console.log('🎉 Pagamento aprovado via webhook - reduzindo estoque:', orderId);
+        try {
+          await reduceStockOnPaymentApproved(orderId);
+          console.log(`📦 Estoque reduzido automaticamente via webhook (payment.controller) para o pedido ${orderId}`);
+        } catch (stockError) {
+          console.error(`❌ Erro ao reduzir estoque via webhook (payment.controller) do pedido ${orderId}:`, stockError);
+        }
+      }
     } else {
       console.log(`ℹ️ Pedido ${order.id} já está com status correto: ${newStatus}`);
     }

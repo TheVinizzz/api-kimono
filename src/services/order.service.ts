@@ -1,5 +1,6 @@
 import { Order, OrderStatus } from '@prisma/client';
 import prisma from '../config/prisma';
+import { correiosService } from './correios.service';
 
 interface CreateOrderData {
   email: string;
@@ -325,6 +326,159 @@ class OrderService {
     } catch (error) {
       console.error('❌ Erro ao buscar pedidos por email:', error);
       throw new Error('Erro ao buscar pedidos por email');
+    }
+  }
+
+  // Gerar código de rastreio dos Correios para um pedido pago
+  async gerarCodigoRastreio(orderId: number): Promise<string | null> {
+    try {
+      console.log(`📮 Gerando código de rastreio para pedido ${orderId}...`);
+
+      // Buscar pedido completo com itens
+      const order = await prisma.order.findUnique({
+        where: { id: orderId },
+        include: {
+          items: {
+            include: {
+              product: true
+            }
+          }
+        }
+      });
+      
+      if (!order) {
+        console.error('❌ Pedido não encontrado:', orderId);
+        return null;
+      }
+
+      // Verificar se pedido está pago
+      if (order.status !== 'PAID' && order.paymentStatus !== 'PAID') {
+        console.log('⚠️ Pedido ainda não foi pago, aguardando confirmação de pagamento');
+        return null;
+      }
+
+      // Verificar se já possui código de rastreio
+      if (order.trackingNumber && order.trackingNumber !== 'Não disponível') {
+        console.log('✅ Pedido já possui código de rastreio:', order.trackingNumber);
+        return order.trackingNumber;
+      }
+
+      // Validar configuração dos Correios
+      if (!correiosService.validateConfig()) {
+        console.error('❌ Configuração dos Correios incompleta');
+        return null;
+      }
+
+      // Extrair dados do endereço
+      const enderecoPartes = order.shippingAddress?.split(', ') || [];
+      if (enderecoPartes.length < 4) {
+        console.error('❌ Endereço de entrega inválido:', order.shippingAddress);
+        return null;
+      }
+
+      // Parse do endereço (formato: "Rua X, 123, Bairro, Cidade - UF, CEP")
+      const [logradouroNumero, bairro, cidadeUF, cep] = enderecoPartes;
+      const [logradouro, numero] = logradouroNumero.split(', ');
+      const [cidade, uf] = cidadeUF.split(' - ');
+
+      // Calcular peso total dos itens (estimativa de 400g por item como padrão para kimono)
+      const pesoTotal = order.items?.reduce((total: number, item: any) => {
+        return total + (item.quantity * 400); // 400g por kimono
+      }, 0) || 400; // Peso padrão se não houver itens
+
+      // Preparar dados para prepostagem
+      const dadosPrepostagem = {
+        orderId: order.id,
+        destinatario: {
+          nome: order.customerName || 'Cliente',
+          documento: order.customerDocument || '',
+          telefone: order.customerPhone || undefined,
+          email: order.customerEmail || undefined,
+          endereco: {
+            logradouro: logradouro || '',
+            numero: numero || '',
+            complemento: '', // Pode ser extraído se necessário
+            bairro: bairro || '',
+            cidade: cidade || '',
+            uf: uf || '',
+            cep: (cep || '').replace(/\D/g, '') // Remove caracteres não numéricos
+          }
+        },
+        servico: '03298', // PAC como padrão (mais econômico)
+        peso: pesoTotal,
+        valor: Number(order.total),
+        observacao: `Pedido #${order.id} - Kimono Store`
+      };
+
+      // Criar prepostagem nos Correios
+      const resultado = await correiosService.criarPrepostagemPedido(dadosPrepostagem);
+
+      if (resultado.erro) {
+        console.error('❌ Erro ao criar prepostagem:', resultado.mensagem);
+        return null;
+      }
+
+      if (!resultado.codigoObjeto) {
+        console.error('❌ Código de rastreio não foi gerado');
+        return null;
+      }
+
+      // Atualizar pedido com código de rastreio
+      await prisma.order.update({
+        where: { id: orderId },
+        data: {
+          trackingNumber: resultado.codigoObjeto,
+          shippingCarrier: 'Correios',
+          status: 'PROCESSING' // Mover para processamento
+        }
+      });
+
+      console.log('✅ Código de rastreio gerado com sucesso:', resultado.codigoObjeto);
+      return resultado.codigoObjeto;
+
+    } catch (error) {
+      console.error('❌ Erro ao gerar código de rastreio:', error);
+      return null;
+    }
+  }
+
+  // Processar pedidos pagos sem código de rastreio
+  async processarPedidosPagos(): Promise<void> {
+    try {
+      console.log('🔄 Processando pedidos pagos sem código de rastreio...');
+
+      // Buscar pedidos pagos sem código de rastreio
+      const pedidosSemRastreio = await prisma.order.findMany({
+        where: {
+          OR: [
+            { status: 'PAID' },
+            { paymentStatus: 'PAID' }
+          ],
+          AND: [
+            {
+              OR: [
+                { trackingNumber: null },
+                { trackingNumber: '' },
+                { trackingNumber: 'Não disponível' },
+                { trackingNumber: 'Ainda não disponível' }
+              ]
+            }
+          ]
+        },
+        take: 10 // Processar máximo 10 por vez
+      });
+
+      console.log(`📊 Encontrados ${pedidosSemRastreio.length} pedidos para processar`);
+
+      for (const pedido of pedidosSemRastreio) {
+        await this.gerarCodigoRastreio(pedido.id);
+        // Aguarda 2 segundos entre cada chamada para não sobrecarregar a API
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+
+      console.log('✅ Processamento de pedidos pagos concluído');
+    } catch (error) {
+      console.error('❌ Erro ao processar pedidos pagos:', error);
     }
   }
 }

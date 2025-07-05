@@ -20,6 +20,12 @@ const productSchema = z.object({
   stock: z.number().int().nonnegative('Estoque não pode ser negativo'),
   imageUrl: z.string().url('URL da imagem inválida').or(z.literal('')).optional(),
   categoryId: z.number(),
+  brandId: z.number().optional(),
+  // Campos de peso e dimensões para cálculo de frete
+  weight: z.number().positive('Peso deve ser positivo').min(0.1, 'Peso mínimo é 0.1kg'),
+  height: z.number().positive('Altura deve ser positiva').min(1, 'Altura mínima é 1cm'),
+  width: z.number().positive('Largura deve ser positiva').min(1, 'Largura mínima é 1cm'),
+  length: z.number().positive('Comprimento deve ser positivo').min(1, 'Comprimento mínimo é 1cm'),
 });
 
 // Schema de validação para variação de produto
@@ -28,12 +34,14 @@ const productVariantSchema = z.object({
   price: z.number().positive('Preço deve ser positivo'),
   stock: z.number().int().nonnegative('Estoque não pode ser negativo'),
   sku: z.string().optional(),
+  weight: z.number().positive('Peso deve ser positivo').min(0.1, 'Peso mínimo é 0.1kg').optional(),
   isActive: z.boolean().default(true),
 });
 
 // Atualizar consultas existentes para incluir variants
 const includeRelations = {
   category: true,
+  brand: true,
   images: {
     orderBy: [
       { isMain: 'desc' as const },
@@ -51,6 +59,7 @@ export const getFilteredProducts = async (req: Request, res: Response) => {
   try {
     const {
       categoryId,
+      brandId,
       search,
       minPrice,
       maxPrice,
@@ -64,6 +73,11 @@ export const getFilteredProducts = async (req: Request, res: Response) => {
     // Filtrar por categoria
     if (categoryId && !isNaN(Number(categoryId))) {
       where.categoryId = Number(categoryId);
+    }
+
+    // Filtrar por marca
+    if (brandId && !isNaN(Number(brandId))) {
+      where.brandId = Number(brandId);
     }
 
     // Busca por texto no nome ou descrição do produto
@@ -241,7 +255,7 @@ export const createProduct = async (req: Request, res: Response) => {
       });
     }
     
-    const { name, description, price, originalPrice, stock, imageUrl, categoryId } = validation.data;
+    const { name, description, price, originalPrice, stock, imageUrl, categoryId, brandId } = validation.data;
     
     // Verificar se a categoria existe
     const categoryExists = await prisma.category.findUnique({
@@ -250,6 +264,17 @@ export const createProduct = async (req: Request, res: Response) => {
     
     if (!categoryExists) {
       return res.status(400).json({ error: 'Categoria não encontrada' });
+    }
+
+    // Verificar se a marca existe (se fornecida)
+    if (brandId) {
+      const brandExists = await prisma.brand.findUnique({
+        where: { id: brandId },
+      });
+      
+      if (!brandExists) {
+        return res.status(400).json({ error: 'Marca não encontrada' });
+      }
     }
     
     // Ao criar ou editar produto, aceite imageUrl como string vazia
@@ -266,9 +291,11 @@ export const createProduct = async (req: Request, res: Response) => {
         stock,
         imageUrl,
         categoryId,
+        brandId,
       },
       include: { 
         category: true,
+        brand: true,
         images: {
           orderBy: [
             { isMain: 'desc' },
@@ -327,6 +354,17 @@ export const updateProduct = async (req: Request, res: Response) => {
         return res.status(400).json({ error: 'Categoria não encontrada' });
       }
     }
+
+    // Se brandId estiver definido, verificar se a marca existe
+    if (updateData.brandId) {
+      const brandExists = await prisma.brand.findUnique({
+        where: { id: updateData.brandId },
+      });
+      
+      if (!brandExists) {
+        return res.status(400).json({ error: 'Marca não encontrada' });
+      }
+    }
     
     // Ao criar ou editar produto, aceite imageUrl como string vazia
     if (typeof updateData.imageUrl !== 'string') {
@@ -338,6 +376,7 @@ export const updateProduct = async (req: Request, res: Response) => {
       data: updateData,
       include: { 
         category: true,
+        brand: true,
         images: {
           orderBy: [
             { isMain: 'desc' },
