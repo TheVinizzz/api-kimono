@@ -9,29 +9,67 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteProduct = exports.updateProduct = exports.createProduct = exports.getProductById = exports.getAllProducts = exports.getFilteredProducts = void 0;
+exports.createMultipleVariants = exports.getProductVariants = exports.deleteProductVariant = exports.updateProductVariant = exports.createProductVariant = exports.deleteProduct = exports.updateProduct = exports.createProduct = exports.getProductById = exports.getAllProducts = exports.getFilteredProducts = void 0;
 const client_1 = require("@prisma/client");
 const zod_1 = require("zod");
 const prisma = new client_1.PrismaClient();
+// Helper function to serialize BigInt values for JSON
+const serializeBigInt = (obj) => {
+    return JSON.parse(JSON.stringify(obj, (key, value) => typeof value === 'bigint' ? value.toString() : value));
+};
 // Schema de validação para produto
 const productSchema = zod_1.z.object({
     name: zod_1.z.string().min(3, 'Nome deve ter pelo menos 3 caracteres'),
     description: zod_1.z.string(),
     price: zod_1.z.number().positive('Preço deve ser positivo'),
-    originalPrice: zod_1.z.number().positive('Preço original deve ser positivo').optional(),
+    originalPrice: zod_1.z.number().min(0, 'Preço original deve ser zero ou positivo').nullable().optional(),
     stock: zod_1.z.number().int().nonnegative('Estoque não pode ser negativo'),
-    imageUrl: zod_1.z.string().url('URL da imagem inválida').optional(),
+    imageUrl: zod_1.z.string().url('URL da imagem inválida').or(zod_1.z.literal('')).optional(),
     categoryId: zod_1.z.number(),
+    brandId: zod_1.z.number().optional(),
+    // Campos de peso e dimensões para cálculo de frete
+    weight: zod_1.z.number().positive('Peso deve ser positivo').min(0.1, 'Peso mínimo é 0.1kg'),
+    height: zod_1.z.number().positive('Altura deve ser positiva').min(1, 'Altura mínima é 1cm'),
+    width: zod_1.z.number().positive('Largura deve ser positiva').min(1, 'Largura mínima é 1cm'),
+    length: zod_1.z.number().positive('Comprimento deve ser positivo').min(1, 'Comprimento mínimo é 1cm'),
 });
-// Nova função para obter produtos filtrados
+// Schema de validação para variação de produto
+const productVariantSchema = zod_1.z.object({
+    size: zod_1.z.string().min(1, 'Tamanho é obrigatório'),
+    price: zod_1.z.number().positive('Preço deve ser positivo'),
+    stock: zod_1.z.number().int().nonnegative('Estoque não pode ser negativo'),
+    sku: zod_1.z.string().optional(),
+    weight: zod_1.z.number().positive('Peso deve ser positivo').min(0.1, 'Peso mínimo é 0.1kg').optional(),
+    isActive: zod_1.z.boolean().default(true),
+});
+// Atualizar consultas existentes para incluir variants
+const includeRelations = {
+    category: true,
+    brand: true,
+    images: {
+        orderBy: [
+            { isMain: 'desc' },
+            { order: 'asc' }
+        ]
+    },
+    variants: {
+        where: { isActive: true },
+        orderBy: { size: 'asc' }
+    }
+};
+// Nova função para obter produtos filtrados (atualizada)
 const getFilteredProducts = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const { categoryId, search, minPrice, maxPrice, discount, sort } = req.query;
+        const { categoryId, brandId, search, minPrice, maxPrice, discount, sort } = req.query;
         // Construir o where para o Prisma
         const where = {};
         // Filtrar por categoria
         if (categoryId && !isNaN(Number(categoryId))) {
             where.categoryId = Number(categoryId);
+        }
+        // Filtrar por marca
+        if (brandId && !isNaN(Number(brandId))) {
+            where.brandId = Number(brandId);
         }
         // Busca por texto no nome ou descrição do produto
         if (search && typeof search === 'string') {
@@ -96,19 +134,11 @@ const getFilteredProducts = (req, res) => __awaiter(void 0, void 0, void 0, func
                     orderBy = { createdAt: 'desc' };
             }
         }
-        // Buscar produtos com os filtros aplicados
+        // Buscar produtos com os filtros aplicados (incluindo variants)
         const products = yield prisma.product.findMany({
             where,
             orderBy,
-            include: {
-                category: true,
-                images: {
-                    orderBy: [
-                        { isMain: 'desc' },
-                        { order: 'asc' }
-                    ]
-                }
-            }
+            include: includeRelations
         });
         // Filtrar por percentual de desconto (se necessário)
         let filteredProducts = [...products];
@@ -132,7 +162,9 @@ const getFilteredProducts = (req, res) => __awaiter(void 0, void 0, void 0, func
                 }
             });
         }
-        return res.json(filteredProducts);
+        // Serializar BigInt antes de enviar resposta
+        const serializedProducts = serializeBigInt(filteredProducts);
+        return res.json(serializedProducts);
     }
     catch (error) {
         console.error('Erro ao filtrar produtos:', error);
@@ -140,21 +172,15 @@ const getFilteredProducts = (req, res) => __awaiter(void 0, void 0, void 0, func
     }
 });
 exports.getFilteredProducts = getFilteredProducts;
-// Obter todos os produtos
+// Obter todos os produtos (atualizada)
 const getAllProducts = (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const products = yield prisma.product.findMany({
-            include: {
-                category: true,
-                images: {
-                    orderBy: [
-                        { isMain: 'desc' },
-                        { order: 'asc' }
-                    ]
-                }
-            },
+            include: includeRelations,
         });
-        return res.json(products);
+        // Serializar BigInt antes de enviar resposta
+        const serializedProducts = serializeBigInt(products);
+        return res.json(serializedProducts);
     }
     catch (error) {
         console.error('Erro ao buscar produtos:', error);
@@ -162,7 +188,7 @@ const getAllProducts = (_req, res) => __awaiter(void 0, void 0, void 0, function
     }
 });
 exports.getAllProducts = getAllProducts;
-// Obter produto por ID
+// Obter produto por ID (atualizada)
 const getProductById = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { id } = req.params;
@@ -172,20 +198,14 @@ const getProductById = (req, res) => __awaiter(void 0, void 0, void 0, function*
         }
         const product = yield prisma.product.findUnique({
             where: { id: productId },
-            include: {
-                category: true,
-                images: {
-                    orderBy: [
-                        { isMain: 'desc' },
-                        { order: 'asc' }
-                    ]
-                }
-            },
+            include: includeRelations,
         });
         if (!product) {
             return res.status(404).json({ error: 'Produto não encontrado' });
         }
-        return res.json(product);
+        // Serializar BigInt antes de enviar resposta
+        const serializedProduct = serializeBigInt(product);
+        return res.json(serializedProduct);
     }
     catch (error) {
         console.error('Erro ao buscar produto:', error);
@@ -203,13 +223,26 @@ const createProduct = (req, res) => __awaiter(void 0, void 0, void 0, function* 
                 details: validation.error.format()
             });
         }
-        const { name, description, price, originalPrice, stock, imageUrl, categoryId } = validation.data;
+        const { name, description, price, originalPrice, stock, imageUrl, categoryId, brandId } = validation.data;
         // Verificar se a categoria existe
         const categoryExists = yield prisma.category.findUnique({
             where: { id: categoryId },
         });
         if (!categoryExists) {
             return res.status(400).json({ error: 'Categoria não encontrada' });
+        }
+        // Verificar se a marca existe (se fornecida)
+        if (brandId) {
+            const brandExists = yield prisma.brand.findUnique({
+                where: { id: brandId },
+            });
+            if (!brandExists) {
+                return res.status(400).json({ error: 'Marca não encontrada' });
+            }
+        }
+        // Ao criar ou editar produto, aceite imageUrl como string vazia
+        if (typeof imageUrl !== 'string') {
+            req.body.imageUrl = '';
         }
         const newProduct = yield prisma.product.create({
             data: {
@@ -220,9 +253,11 @@ const createProduct = (req, res) => __awaiter(void 0, void 0, void 0, function* 
                 stock,
                 imageUrl,
                 categoryId,
+                brandId,
             },
             include: {
                 category: true,
+                brand: true,
                 images: {
                     orderBy: [
                         { isMain: 'desc' },
@@ -231,7 +266,9 @@ const createProduct = (req, res) => __awaiter(void 0, void 0, void 0, function* 
                 }
             },
         });
-        return res.status(201).json(newProduct);
+        // Serializar BigInt antes de enviar resposta
+        const serializedProduct = serializeBigInt(newProduct);
+        return res.status(201).json(serializedProduct);
     }
     catch (error) {
         console.error('Erro ao criar produto:', error);
@@ -271,11 +308,25 @@ const updateProduct = (req, res) => __awaiter(void 0, void 0, void 0, function* 
                 return res.status(400).json({ error: 'Categoria não encontrada' });
             }
         }
+        // Se brandId estiver definido, verificar se a marca existe
+        if (updateData.brandId) {
+            const brandExists = yield prisma.brand.findUnique({
+                where: { id: updateData.brandId },
+            });
+            if (!brandExists) {
+                return res.status(400).json({ error: 'Marca não encontrada' });
+            }
+        }
+        // Ao criar ou editar produto, aceite imageUrl como string vazia
+        if (typeof updateData.imageUrl !== 'string') {
+            updateData.imageUrl = '';
+        }
         const updatedProduct = yield prisma.product.update({
             where: { id: productId },
             data: updateData,
             include: {
                 category: true,
+                brand: true,
                 images: {
                     orderBy: [
                         { isMain: 'desc' },
@@ -284,7 +335,9 @@ const updateProduct = (req, res) => __awaiter(void 0, void 0, void 0, function* 
                 }
             },
         });
-        return res.json(updatedProduct);
+        // Serializar BigInt antes de enviar resposta
+        const serializedProduct = serializeBigInt(updatedProduct);
+        return res.json(serializedProduct);
     }
     catch (error) {
         console.error('Erro ao atualizar produto:', error);
@@ -386,5 +439,232 @@ const deleteProduct = (req, res) => __awaiter(void 0, void 0, void 0, function* 
     }
 });
 exports.deleteProduct = deleteProduct;
+// ===== NOVAS FUNÇÕES PARA GERENCIAR VARIAÇÕES =====
+// Criar variação de produto
+const createProductVariant = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { productId } = req.params;
+        const productIdNum = Number(productId);
+        if (isNaN(productIdNum)) {
+            return res.status(400).json({ error: 'ID do produto inválido' });
+        }
+        // Verificar se o produto existe
+        const product = yield prisma.product.findUnique({ where: { id: productIdNum } });
+        if (!product) {
+            return res.status(404).json({ error: 'Produto não encontrado' });
+        }
+        const validation = productVariantSchema.safeParse(req.body);
+        if (!validation.success) {
+            return res.status(400).json({
+                error: 'Dados inválidos',
+                details: validation.error.format()
+            });
+        }
+        const { size, price, stock, sku, isActive } = validation.data;
+        // Verificar se já existe uma variação com o mesmo tamanho
+        const existingVariant = yield prisma.productVariant.findUnique({
+            where: { productId_size: { productId: productIdNum, size } }
+        });
+        if (existingVariant) {
+            return res.status(400).json({ error: `Já existe uma variação com o tamanho ${size}` });
+        }
+        const newVariant = yield prisma.productVariant.create({
+            data: {
+                productId: productIdNum,
+                size,
+                price,
+                stock,
+                sku,
+                isActive
+            }
+        });
+        // Serializar BigInt antes de enviar resposta
+        const serializedVariant = serializeBigInt(newVariant);
+        return res.status(201).json(serializedVariant);
+    }
+    catch (error) {
+        console.error('Erro ao criar variação:', error);
+        return res.status(500).json({ error: 'Erro ao criar variação do produto' });
+    }
+});
+exports.createProductVariant = createProductVariant;
+// Atualizar variação de produto
+const updateProductVariant = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { productId, variantId } = req.params;
+        const productIdNum = Number(productId);
+        const variantIdNum = Number(variantId);
+        if (isNaN(productIdNum) || isNaN(variantIdNum)) {
+            return res.status(400).json({ error: 'IDs inválidos' });
+        }
+        // Verificar se a variação existe
+        const existingVariant = yield prisma.productVariant.findFirst({
+            where: { id: variantIdNum, productId: productIdNum }
+        });
+        if (!existingVariant) {
+            return res.status(404).json({ error: 'Variação não encontrada' });
+        }
+        const validation = productVariantSchema.partial().safeParse(req.body);
+        if (!validation.success) {
+            return res.status(400).json({
+                error: 'Dados inválidos',
+                details: validation.error.format()
+            });
+        }
+        const updateData = validation.data;
+        // Se o tamanho está sendo alterado, verificar se não existe conflito
+        if (updateData.size && updateData.size !== existingVariant.size) {
+            const sizeConflict = yield prisma.productVariant.findUnique({
+                where: { productId_size: { productId: productIdNum, size: updateData.size } }
+            });
+            if (sizeConflict) {
+                return res.status(400).json({ error: `Já existe uma variação com o tamanho ${updateData.size}` });
+            }
+        }
+        const updatedVariant = yield prisma.productVariant.update({
+            where: { id: variantIdNum },
+            data: updateData
+        });
+        // Serializar BigInt antes de enviar resposta
+        const serializedVariant = serializeBigInt(updatedVariant);
+        return res.json(serializedVariant);
+    }
+    catch (error) {
+        console.error('Erro ao atualizar variação:', error);
+        return res.status(500).json({ error: 'Erro ao atualizar variação do produto' });
+    }
+});
+exports.updateProductVariant = updateProductVariant;
+// Deletar variação de produto
+const deleteProductVariant = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { productId, variantId } = req.params;
+        const productIdNum = Number(productId);
+        const variantIdNum = Number(variantId);
+        if (isNaN(productIdNum) || isNaN(variantIdNum)) {
+            return res.status(400).json({ error: 'IDs inválidos' });
+        }
+        // Verificar se a variação existe
+        const existingVariant = yield prisma.productVariant.findFirst({
+            where: { id: variantIdNum, productId: productIdNum }
+        });
+        if (!existingVariant) {
+            return res.status(404).json({ error: 'Variação não encontrada' });
+        }
+        // Verificar se há pedidos relacionados a esta variação
+        const relatedOrderItems = yield prisma.orderItem.findFirst({
+            where: { productVariantId: variantIdNum }
+        });
+        if (relatedOrderItems) {
+            // Marcar como inativa em vez de deletar
+            yield prisma.productVariant.update({
+                where: { id: variantIdNum },
+                data: { isActive: false, stock: 0 }
+            });
+            return res.json({
+                message: 'Variação marcada como inativa pois existem pedidos associados',
+                inactivated: true
+            });
+        }
+        // Deletar a variação
+        yield prisma.productVariant.delete({
+            where: { id: variantIdNum }
+        });
+        return res.status(204).send();
+    }
+    catch (error) {
+        console.error('Erro ao deletar variação:', error);
+        return res.status(500).json({ error: 'Erro ao deletar variação do produto' });
+    }
+});
+exports.deleteProductVariant = deleteProductVariant;
+// Obter variações de um produto
+const getProductVariants = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { productId } = req.params;
+        const productIdNum = Number(productId);
+        if (isNaN(productIdNum)) {
+            return res.status(400).json({ error: 'ID do produto inválido' });
+        }
+        // Verificar se o produto existe
+        const product = yield prisma.product.findUnique({ where: { id: productIdNum } });
+        if (!product) {
+            return res.status(404).json({ error: 'Produto não encontrado' });
+        }
+        const variants = yield prisma.productVariant.findMany({
+            where: { productId: productIdNum },
+            orderBy: { size: 'asc' }
+        });
+        // Serializar BigInt antes de enviar resposta
+        const serializedVariants = serializeBigInt(variants);
+        return res.json(serializedVariants);
+    }
+    catch (error) {
+        console.error('Erro ao buscar variações:', error);
+        return res.status(500).json({ error: 'Erro ao buscar variações do produto' });
+    }
+});
+exports.getProductVariants = getProductVariants;
+// Criar múltiplas variações de uma vez
+const createMultipleVariants = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { productId } = req.params;
+        const productIdNum = Number(productId);
+        if (isNaN(productIdNum)) {
+            return res.status(400).json({ error: 'ID do produto inválido' });
+        }
+        // Verificar se o produto existe
+        const product = yield prisma.product.findUnique({ where: { id: productIdNum } });
+        if (!product) {
+            return res.status(404).json({ error: 'Produto não encontrado' });
+        }
+        const { variants } = req.body;
+        if (!Array.isArray(variants) || variants.length === 0) {
+            return res.status(400).json({ error: 'Lista de variações é obrigatória' });
+        }
+        // Validar todas as variações
+        const validatedVariants = [];
+        for (const variant of variants) {
+            const validation = productVariantSchema.safeParse(variant);
+            if (!validation.success) {
+                return res.status(400).json({
+                    error: `Dados inválidos para variação ${variant.size}`,
+                    details: validation.error.format()
+                });
+            }
+            validatedVariants.push(Object.assign(Object.assign({}, validation.data), { productId: productIdNum }));
+        }
+        // Verificar se algum tamanho já existe
+        const existingSizes = yield prisma.productVariant.findMany({
+            where: {
+                productId: productIdNum,
+                size: { in: validatedVariants.map(v => v.size) }
+            },
+            select: { size: true }
+        });
+        if (existingSizes.length > 0) {
+            return res.status(400).json({
+                error: `Os seguintes tamanhos já existem: ${existingSizes.map(s => s.size).join(', ')}`
+            });
+        }
+        // Criar todas as variações
+        const createdVariants = yield prisma.productVariant.createMany({
+            data: validatedVariants
+        });
+        // Buscar as variações criadas para retornar
+        const newVariants = yield prisma.productVariant.findMany({
+            where: { productId: productIdNum },
+            orderBy: { size: 'asc' }
+        });
+        // Serializar BigInt antes de enviar resposta
+        const serializedVariants = serializeBigInt(newVariants);
+        return res.status(201).json(serializedVariants);
+    }
+    catch (error) {
+        console.error('Erro ao criar múltiplas variações:', error);
+        return res.status(500).json({ error: 'Erro ao criar variações do produto' });
+    }
+});
+exports.createMultipleVariants = createMultipleVariants;
 // Este arquivo é apenas um exemplo de integração
 // Para usar, adapte seus controllers existentes conforme necessário 

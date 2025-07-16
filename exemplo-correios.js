@@ -3,8 +3,8 @@
 
 const axios = require('axios');
 
-const API_BASE = 'http://localhost:3000/api';
-const ADMIN_TOKEN = 'SEU_TOKEN_DE_ADMIN_AQUI';
+const API_BASE = 'http://localhost:4000/api';
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'SEU_TOKEN_DE_ADMIN_AQUI';
 
 // Headers padrão
 const headers = {
@@ -64,6 +64,60 @@ async function exemploCompleto() {
       console.log('⚠️ Código não encontrado ou inválido');
     }
     console.log('');
+
+    // 5. Exemplo detalhado de criação manual de pré-postagem
+    console.log('5. Exemplo detalhado de criação manual de pré-postagem:');
+    console.log('\nPara criar uma pré-postagem manualmente, você precisa fornecer:');
+    
+    console.log(`
+    // Exemplo de payload para criar pré-postagem
+    {
+      "remetente": {
+        "nome": "KIMONO STORE",
+        "cnpj": "48496267000148", // Apenas números
+        "inscricaoEstadual": "ISENTO",
+        "endereco": {
+          "logradouro": "R VIEIRA PORTUENSE",
+          "numero": "62",
+          "complemento": "FUNDOS",
+          "bairro": "JARDIM ORIENTAL",
+          "cidade": "SAO PAULO",
+          "uf": "SP",
+          "cep": "04347080" // Apenas números, sem pontos ou traços
+        },
+        "telefone": "11981019084", // Apenas números
+        "email": "contato@kimonostore.com"
+      },
+      "destinatario": {
+        "nome": "NOME DO CLIENTE",
+        "documento": "12345678900", // CPF ou CNPJ (apenas números)
+        "telefone": "11999999999", // Opcional
+        "email": "cliente@email.com", // Opcional
+        "endereco": {
+          "logradouro": "RUA DO CLIENTE",
+          "numero": "123",
+          "complemento": "APTO 45", // Opcional
+          "bairro": "BAIRRO DO CLIENTE",
+          "cidade": "SAO PAULO",
+          "uf": "SP",
+          "cep": "01234567" // Apenas números
+        }
+      },
+      "servico": "03298", // PAC Contrato (03298) ou SEDEX Contrato (03220)
+      "volumes": [
+        {
+          "altura": 5, // em cm
+          "largura": 25, // em cm
+          "comprimento": 30, // em cm
+          "peso": 500, // em gramas (mínimo 300g)
+          "tipoObjeto": 2, // 2 = Pacote
+          "valorDeclarado": 100 // opcional, em reais
+        }
+      ],
+      "servicosAdicionais": ["001"], // 001 = Valor declarado (opcional)
+      "observacao": "Pedido #123" // opcional
+    }
+    `);
 
     console.log('🎉 Teste completo finalizado!');
 

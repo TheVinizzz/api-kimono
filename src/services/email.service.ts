@@ -14,6 +14,15 @@ interface OrderEmailData {
   paymentMethod: string;
 }
 
+interface TrackingEmailData {
+  orderId: number;
+  customerName: string;
+  customerEmail: string;
+  trackingNumber: string;
+  shippingCarrier: string;
+  estimatedDelivery?: string;
+}
+
 class EmailService {
   private transporter: nodemailer.Transporter;
 
@@ -24,16 +33,45 @@ class EmailService {
       auth: {
         user: process.env.EMAIL_USER || '',
         pass: process.env.EMAIL_PASS || ''
-      }
+      },
+      // Adicionar configurações para melhorar entregabilidade
+      pool: true, // Use connection pooling
+      maxConnections: 5,
+      maxMessages: 100,
+      rateDelta: 1000,
+      rateLimit: 5
     });
+
+    // Verificar conexão ao iniciar
+    this.verifyConnection();
+  }
+
+  // Verificar conexão com o servidor de email
+  private async verifyConnection(): Promise<void> {
+    try {
+      if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+        console.log('⚠️ Configuração de email incompleta. Emails não serão enviados.');
+        return;
+      }
+
+      await this.transporter.verify();
+      console.log('✅ Conexão com servidor de email estabelecida com sucesso');
+    } catch (error) {
+      console.error('❌ Erro ao conectar com servidor de email:', error);
+    }
   }
 
   async sendPaymentConfirmation(orderData: OrderEmailData): Promise<boolean> {
     try {
+      if (!this.isEmailConfigured()) {
+        console.log('⚠️ Email não configurado. Pulando envio de confirmação de pagamento.');
+        return false;
+      }
+
       const emailHtml = this.generatePaymentConfirmationEmail(orderData);
 
       const mailOptions = {
-        from: process.env.EMAIL_FROM || 'noreply@seusite.com',
+        from: process.env.EMAIL_FROM || `"Kimono Store" <${process.env.EMAIL_USER}>`,
         to: orderData.customerEmail,
         subject: `Pagamento Confirmado - Pedido #${orderData.orderId}`,
         html: emailHtml
@@ -46,6 +84,116 @@ class EmailService {
       console.error('❌ Erro ao enviar email:', error);
       return false;
     }
+  }
+
+  async sendTrackingCodeNotification(trackingData: TrackingEmailData): Promise<boolean> {
+    try {
+      if (!this.isEmailConfigured()) {
+        console.log('⚠️ Email não configurado. Pulando envio de código de rastreio.');
+        return false;
+      }
+
+      const emailHtml = this.generateTrackingCodeEmail(trackingData);
+
+      const mailOptions = {
+        from: process.env.EMAIL_FROM || `"Kimono Store" <${process.env.EMAIL_USER}>`,
+        to: trackingData.customerEmail,
+        subject: `Código de Rastreio Disponível - Pedido #${trackingData.orderId}`,
+        html: emailHtml
+      };
+
+      // Tentar enviar com retry em caso de falha
+      let tentativas = 0;
+      const maxTentativas = 3;
+      
+      while (tentativas < maxTentativas) {
+        tentativas++;
+        try {
+          await this.transporter.sendMail(mailOptions);
+          console.log(`✅ Email com código de rastreio enviado para ${trackingData.customerEmail}`);
+          return true;
+        } catch (retryError) {
+          console.error(`❌ Erro na tentativa ${tentativas}/${maxTentativas} de enviar email:`, retryError);
+          
+          if (tentativas < maxTentativas) {
+            const tempoEspera = Math.pow(2, tentativas) * 1000; // 2s, 4s, 8s...
+            console.log(`⏳ Aguardando ${tempoEspera/1000}s antes da próxima tentativa...`);
+            await new Promise(resolve => setTimeout(resolve, tempoEspera));
+          }
+        }
+      }
+
+      console.error('❌ Todas as tentativas de envio de email falharam');
+      return false;
+    } catch (error) {
+      console.error('❌ Erro ao enviar email de rastreio:', error);
+      return false;
+    }
+  }
+
+  // Verificar se o email está configurado
+  private isEmailConfigured(): boolean {
+    return !!(process.env.EMAIL_USER && process.env.EMAIL_PASS);
+  }
+
+  private generateTrackingCodeEmail(trackingData: TrackingEmailData): string {
+    const rastreioUrl = trackingData.shippingCarrier.toLowerCase().includes('correios') 
+      ? `https://rastreamento.correios.com.br/app/index.php`
+      : 'https://rastreamento.correios.com.br/app/index.php';
+
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Código de Rastreio Disponível</title>
+      </head>
+      <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+          <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="color: #D4AF37; margin: 0;">📦 Seu Pedido foi Enviado!</h1>
+          </div>
+          
+          <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+            <h2 style="margin: 0 0 10px 0; color: #495057;">Olá, ${trackingData.customerName}!</h2>
+            <p style="margin: 0;">Seu pedido #${trackingData.orderId} foi enviado e já está a caminho!</p>
+          </div>
+
+          <div style="background: #e8f4f8; padding: 20px; border-radius: 8px; margin-bottom: 20px; text-align: center;">
+            <h3 style="margin: 0 0 15px 0; color: #0056b3;">Seu Código de Rastreio</h3>
+            <div style="font-size: 24px; font-weight: bold; letter-spacing: 2px; padding: 15px; background: #fff; border-radius: 5px; border: 1px dashed #0056b3;">
+              ${trackingData.trackingNumber}
+            </div>
+            <p style="margin-top: 15px;">Transportadora: ${trackingData.shippingCarrier}</p>
+            ${trackingData.estimatedDelivery ? `<p>Previsão de entrega: ${trackingData.estimatedDelivery}</p>` : ''}
+          </div>
+
+          <div style="text-align: center; margin: 25px 0;">
+            <a href="${rastreioUrl}" style="background-color: #0056b3; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
+              RASTREAR MEU PEDIDO
+            </a>
+          </div>
+
+          <div style="background: #e8f5e8; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+            <h4 style="margin: 0 0 10px 0; color: #155724;">Informações Importantes:</h4>
+            <ul style="margin: 0; padding-left: 20px;">
+              <li>O prazo de entrega é de 5-10 dias úteis</li>
+              <li>Você receberá atualizações sobre o status da entrega</li>
+              <li>Em caso de ausência, a entrega poderá ser redirecionada para uma agência dos Correios</li>
+            </ul>
+          </div>
+
+          <div style="text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
+            <p style="color: #6c757d; font-size: 14px;">
+              Dúvidas? Entre em contato conosco:<br>
+              📱 WhatsApp: (83) 99831-1713<br>
+              📧 Email: suporte@seusite.com
+            </p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
   }
 
   private generatePaymentConfirmationEmail(orderData: OrderEmailData): string {

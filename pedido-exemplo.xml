@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<objeto xmlns="http://www.correios.com.br/prepostagem">
+  <cartaoPostagem>03298</cartaoPostagem>
+  <codigoObjeto/>
+  <contrato>9912707785</contrato>
+  <declaracaoConteudo>
+    <itens>
+      <item>
+        <descricao>Kimono</descricao>
+        <quantidade>1</quantidade>
+        <valor>99.90</valor>
+      </item>
+    </itens>
+  </declaracaoConteudo>
+  <destinatario>
+    <nome>Cliente Teste</nome>
+    <documento>12345678909</documento>
+    <telefone>83999999999</telefone>
+    <email>teste@exemplo.com</email>
+    <endereco>
+      <logradouro>Avenida Epitácio Pessoa</logradouro>
+      <numero>1000</numero>
+      <complemento>Apto 101</complemento>
+      <bairro>Tambaú</bairro>
+      <cidade>João Pessoa</cidade>
+      <uf>PB</uf>
+      <cep>58039000</cep>
+    </endereco>
+  </destinatario>
+  <dimensoes>
+    <altura>5</altura>
+    <largura>25</largura>
+    <comprimento>30</comprimento>
+    <diametro>0</diametro>
+  </dimensoes>
+  <formatoObjeto>2</formatoObjeto>
+  <objetosProibidos>false</objetosProibidos>
+  <observacao>Pedido #12345 - Kimono Store</observacao>
+  <peso>500</peso>
+  <remetente>
+    <nome>KIMONO STORE</nome>
+    <cnpj>48496267000148</cnpj>
+    <inscricaoEstadual>ISENTO</inscricaoEstadual>
+    <endereco>
+      <logradouro>R VIEIRA PORTUENSE</logradouro>
+      <numero>62</numero>
+      <complemento>FUNDOSFUNDOS</complemento>
+      <bairro>JARDIM ORIENTAL</bairro>
+      <cidade>SAO PAULO</cidade>
+      <uf>SP</uf>
+      <cep>04347080</cep>
+    </endereco>
+    <telefone>11981019084</telefone>
+    <email>MARCELO.PROCOPIO@EGASOLUTIONS.COM.BR</email>
+  </remetente>
+  <servicoAdicional>
+    <codigoServicoAdicional>001</codigoServicoAdicional>
+  </servicoAdicional>
+  <valorDeclarado>99.90</valorDeclarado>
+</objeto>

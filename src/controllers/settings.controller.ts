@@ -13,7 +13,9 @@ const settingsUpdateSchema = z.object({
   shipping_origin_neighborhood: z.string().min(1).max(100).optional(),
   shipping_origin_city: z.string().min(1).max(100).optional(),
   shipping_origin_state: z.string().length(2).optional(),
-  shipping_origin_phone: z.string().min(10).max(20).optional()
+  shipping_origin_phone: z.string().min(10).max(20).optional(),
+  shipping_origin_email: z.string().email().optional(),
+  shipping_origin_cnpj: z.string().min(14).max(18).optional()
 });
 
 /**
@@ -203,7 +205,9 @@ function getSettingDescription(key: string): string {
     shipping_origin_neighborhood: 'Bairro da empresa remetente',
     shipping_origin_city: 'Cidade da empresa remetente',
     shipping_origin_state: 'Estado da empresa remetente',
-    shipping_origin_phone: 'Telefone da empresa remetente'
+    shipping_origin_phone: 'Telefone da empresa remetente',
+    shipping_origin_email: 'Email da empresa remetente',
+    shipping_origin_cnpj: 'CNPJ da empresa remetente'
   };
 
   return descriptions[key] || 'Configuração da aplicação';

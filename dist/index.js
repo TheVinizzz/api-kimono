@@ -1,4 +1,46 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -6,10 +48,14 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const cookie_parser_1 = __importDefault(require("cookie-parser"));
+const path_1 = __importDefault(require("path"));
 const config_1 = __importDefault(require("./config"));
+const websocket_service_1 = __importDefault(require("./services/websocket.service"));
+const order_service_1 = require("./services/order.service");
 // Importar rotas
 const auth_routes_1 = __importDefault(require("./routes/auth.routes"));
 const categories_routes_1 = __importDefault(require("./routes/categories.routes"));
+const brands_routes_1 = __importDefault(require("./routes/brands.routes"));
 const products_routes_1 = __importDefault(require("./routes/products.routes"));
 const orders_routes_1 = __importDefault(require("./routes/orders.routes"));
 const admin_routes_1 = __importDefault(require("./routes/admin.routes"));
@@ -20,6 +66,14 @@ const analytics_routes_1 = __importDefault(require("./routes/analytics.routes"))
 const upload_routes_1 = __importDefault(require("./routes/upload.routes"));
 const product_images_routes_1 = __importDefault(require("./routes/product-images.routes"));
 const bling_routes_1 = __importDefault(require("./routes/bling.routes"));
+const bling_oauth_routes_1 = __importDefault(require("./routes/bling-oauth.routes"));
+const bling_sync_routes_1 = __importDefault(require("./routes/bling-sync.routes"));
+const shipping_routes_1 = __importDefault(require("./routes/shipping.routes"));
+const shipping_labels_routes_1 = __importDefault(require("./routes/shipping-labels.routes"));
+const correios_routes_1 = __importDefault(require("./routes/correios.routes"));
+const settings_routes_1 = __importDefault(require("./routes/settings.routes"));
+const invoice_routes_1 = __importDefault(require("./routes/invoice.routes"));
+const thermal_invoice_routes_1 = __importDefault(require("./routes/thermal-invoice.routes"));
 // Inicializar o app
 const app = (0, express_1.default)();
 let server;
@@ -38,6 +92,8 @@ app.use((0, cors_1.default)({
 app.use(express_1.default.json({ limit: '10mb' }));
 app.use(express_1.default.urlencoded({ extended: true, limit: '10mb' }));
 app.use((0, cookie_parser_1.default)());
+// Servir arquivos estáticos (imagens de produtos)
+app.use('/uploads', express_1.default.static(path_1.default.join(process.cwd(), 'uploads')));
 // Logging de requisições apenas em desenvolvimento
 if (process.env.NODE_ENV !== 'production') {
     app.use((req, _res, next) => {
@@ -92,18 +148,10 @@ app.get('/', (_req, res) => {
         env: process.env.NODE_ENV
     });
 });
-// FALLBACK: Responder OK para QUALQUER rota GET (debug)
-app.get('*', (req, res) => {
-    console.log(`🔍 Request GET catch-all: ${req.path}`);
-    res.status(200).json({
-        status: 'ok',
-        path: req.path,
-        message: 'Kimono API catch-all'
-    });
-});
 // Rotas da API
 app.use('/api/auth', auth_routes_1.default);
 app.use('/api/categories', categories_routes_1.default);
+app.use('/api/brands', brands_routes_1.default);
 app.use('/api/products', products_routes_1.default);
 app.use('/api/orders', orders_routes_1.default);
 app.use('/api/admin', admin_routes_1.default);
@@ -114,6 +162,47 @@ app.use('/api/analytics', analytics_routes_1.default);
 app.use('/api/upload', upload_routes_1.default);
 app.use('/api/product-images', product_images_routes_1.default);
 app.use('/api/bling', bling_routes_1.default);
+app.use('/api/bling-oauth', bling_oauth_routes_1.default);
+app.use('/api/bling-sync', bling_sync_routes_1.default);
+app.use('/api/shipping', shipping_routes_1.default);
+app.use('/api/shipping-labels', shipping_labels_routes_1.default);
+app.use('/api/correios', correios_routes_1.default);
+app.use('/api/settings', settings_routes_1.default);
+app.use('/api/invoices', invoice_routes_1.default);
+app.use('/api/thermal-invoices', thermal_invoice_routes_1.default);
+// Health check da API
+app.get('/api/health', (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        // Importar prisma dinamicamente para evitar erros de inicialização
+        const { default: prisma } = yield Promise.resolve().then(() => __importStar(require('./config/prisma')));
+        yield prisma.$queryRaw `SELECT 1`;
+        res.json({
+            status: 'ok',
+            timestamp: new Date().toISOString(),
+            database: 'connected',
+            mercadopago: 'configured',
+            version: '1.0.0'
+        });
+    }
+    catch (error) {
+        console.error('API Health check failed:', error);
+        res.status(500).json({
+            status: 'error',
+            timestamp: new Date().toISOString(),
+            database: 'disconnected',
+            error: 'Database connection failed'
+        });
+    }
+}));
+// FALLBACK: Responder OK para QUALQUER rota GET não encontrada (debug)
+app.get('*', (req, res) => {
+    console.log(`🔍 Request GET catch-all: ${req.path}`);
+    res.status(200).json({
+        status: 'ok',
+        path: req.path,
+        message: 'Kimono API catch-all'
+    });
+});
 // Middleware para rotas não encontradas
 app.use((_req, res) => {
     res.status(404).json({ error: 'Rota não encontrada' });
@@ -144,6 +233,14 @@ const gracefulShutdown = (signal) => {
     }
     isShuttingDown = true;
     console.log(`Iniciando graceful shutdown...`);
+    // Destruir WebSocket service primeiro
+    try {
+        websocket_service_1.default.destroy();
+        console.log('🔌 WebSocket Service destruído');
+    }
+    catch (error) {
+        console.error('Erro ao destruir WebSocket:', error);
+    }
     if (server) {
         server.close((err) => {
             if (err) {
@@ -200,6 +297,14 @@ server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 Escutando em 0.0.0.0:${PORT}`);
     console.log(`💾 Memória inicial: ${JSON.stringify(process.memoryUsage())}`);
     console.log(`⏰ Iniciado em: ${new Date().toISOString()}`);
+    // Inicializar WebSocket Server
+    try {
+        websocket_service_1.default.init(server);
+        console.log('🔌 WebSocket Server inicializado com sucesso');
+    }
+    catch (error) {
+        console.error('❌ Erro ao inicializar WebSocket:', error);
+    }
     // Notificar PM2 que a aplicação está pronta
     if (process.send) {
         process.send('ready');
@@ -215,3 +320,14 @@ setInterval(() => {
     const memory = process.memoryUsage();
     console.log(`📊 Status: ${uptime}s uptime | ${requestCount} requests | ${healthCheckCount} health checks | ${Math.floor(memory.rss / 1024 / 1024)}MB RAM`);
 }, 60000);
+// Job agendado para processar pedidos pagos e gerar códigos de rastreio automaticamente
+setInterval(() => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        console.log('🔄 Executando job agendado: processamento automático de pedidos pagos');
+        yield order_service_1.orderService.processarPedidosPagos();
+        console.log('✅ Job de processamento de pedidos e geração de códigos de rastreio concluído com sucesso');
+    }
+    catch (error) {
+        console.error('❌ Erro ao executar job de processamento de pedidos:', error);
+    }
+}), 30 * 60 * 1000); // Executar a cada 30 minutos 

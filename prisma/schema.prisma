@@ -204,16 +204,35 @@ model PageVisit {
 }
 
 model AppSettings {
-  id                Int      @id @default(autoincrement())
-  key               String   @unique
-  value             String
-  description       String?
-  category          String   @default("general")
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id                 Int       @id @default(autoincrement())
+  key                String    @unique
+  value              String
+  description        String?
+  category           String    @default("general")
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  originCompanyName  String    @default("Sua Empresa")
+  originStreet       String    @default("Rua Exemplo, 123")
+  originNeighborhood String    @default("Centro")
+  originCity         String    @default("São Paulo")
+  originState        String    @default("SP")
+  originZipCode      String    @default("01234-567")
+  originPhone        String    @default("(11) 99999-9999")
+  originEmail        String    @default("contato@empresa.com")
+  originCnpj         String    @default("00.000.000/0001-00")
+  originStateReg     String    @default("000.000.000.000") // Inscrição Estadual
 
   @@index([category])
   @@index([key])
+}
+
+// Controle de numeração sequencial das notas fiscais
+model InvoiceNumber {
+  id            Int      @id @default(autoincrement())
+  lastNumber    Int      @default(0)
+  series        String   @default("1")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 enum UserRole {

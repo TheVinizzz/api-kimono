@@ -47,15 +47,16 @@ export const getPendingShippingLabels = async (req: Request, res: Response) => {
     const tenDaysAgo = new Date();
     tenDaysAgo.setDate(tenDaysAgo.getDate() - 10);
 
-    // Buscar todos os pedidos pagos dos últimos 10 dias com filtros mais permissivos
+    // Buscar apenas pedidos que foram processados pelos Correios (têm código de rastreio válido)
     const orders = await prisma.order.findMany({
       where: {
         AND: [
           {
             OR: [
-              { status: 'PAID' },
               { status: 'PROCESSING' },
               { status: 'SHIPPED' },
+              { status: 'IN_TRANSIT' },
+              { status: 'OUT_FOR_DELIVERY' },
               { status: 'DELIVERED' }
             ]
           },
@@ -64,7 +65,23 @@ export const getPendingShippingLabels = async (req: Request, res: Response) => {
               gte: tenDaysAgo
             }
           },
-          { total: { gt: 0 } }
+          { total: { gt: 0 } },
+          // ✅ APENAS pedidos com código de rastreio VÁLIDO dos Correios
+          {
+            trackingNumber: {
+              not: null
+            }
+          },
+          {
+            NOT: {
+              OR: [
+                { trackingNumber: '' },
+                { trackingNumber: 'Não disponível' },
+                { trackingNumber: 'Ainda não disponível' }
+              ]
+            }
+          },
+
         ]
       },
       include: {
@@ -98,10 +115,27 @@ export const getPendingShippingLabels = async (req: Request, res: Response) => {
       ]
     });
 
-    console.log(`Encontrados ${orders.length} pedidos pagos nos últimos 10 dias`);
+    console.log(`Encontrados ${orders.length} pedidos processados pelos Correios nos últimos 10 dias`);
+
+    // Filtrar pedidos com código de rastreio válido dos Correios (formato BR: XX123456789XX)
+    const validOrders = orders.filter(order => {
+      if (!order.trackingNumber) return false;
+      
+      const trackingCode = order.trackingNumber.trim();
+      
+      // Validar formato do código dos Correios (13 caracteres: 2 letras + 9 números + 2 letras)
+      const correiosPattern = /^[A-Z]{2}[0-9]{9}[A-Z]{2}$/;
+      const isValidCorreiosCode = correiosPattern.test(trackingCode);
+      
+      console.log(`📦 Pedido ${order.id}: Código ${trackingCode} - ${isValidCorreiosCode ? 'VÁLIDO' : 'INVÁLIDO'}`);
+      
+      return isValidCorreiosCode;
+    });
+
+    console.log(`✅ ${validOrders.length} pedidos com códigos de rastreio válidos dos Correios`);
 
     // Processar dados do endereço de entrega com mais tolerância
-    const processedOrders = orders.map(order => {
+    const processedOrders = validOrders.map(order => {
       let shippingData = null;
       
       console.log(`🔍 Processando pedido ${order.id}:`);
@@ -305,6 +339,7 @@ export const getPendingShippingLabels = async (req: Request, res: Response) => {
         total: Number(order.total),
         status: order.status,
         createdAt: order.createdAt.toISOString(),
+        trackingNumber: order.trackingNumber, // ✅ Incluir código de rastreio real dos Correios
         shippingData,
         totalWeight: Math.max(totalWeight, 0.1), // Peso mínimo de 100g
         itemsCount: order.items.reduce((sum, item) => sum + item.quantity, 0),
@@ -337,11 +372,12 @@ export const getPendingShippingLabels = async (req: Request, res: Response) => {
       success: true,
       orders: processedOrders,
       count: processedOrders.length,
-      period: '10 dias',
+      period: '10 dias - Apenas pedidos processados pelos Correios',
       filters: {
         pendingCount: processedOrders.filter(o => !o.labelPrinted).length,
         printedCount: processedOrders.filter(o => o.labelPrinted).length,
-        validAddressCount: processedOrders.filter(o => o.hasValidAddress).length
+        validAddressCount: processedOrders.filter(o => o.hasValidAddress).length,
+        withValidTrackingCode: processedOrders.length
       }
     });
 

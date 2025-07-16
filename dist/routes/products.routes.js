@@ -1,48 +1,27 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
-const productsController = __importStar(require("../controllers/products.controller"));
+const products_controller_1 = require("../controllers/products.controller");
 const auth_1 = require("../middleware/auth");
+const auth_2 = require("../middleware/auth");
 const router = (0, express_1.Router)();
 // Rotas públicas
-router.get('/', productsController.getAllProducts);
-router.get('/filter', productsController.getFilteredProducts);
-router.get('/:id', productsController.getProductById);
+router.get('/', products_controller_1.getFilteredProducts);
+router.get('/all', products_controller_1.getAllProducts);
+router.get('/:id', products_controller_1.getProductById);
 // Rotas protegidas (apenas admin)
-router.post('/', auth_1.auth, auth_1.isAdmin, productsController.createProduct);
-router.put('/:id', auth_1.auth, auth_1.isAdmin, productsController.updateProduct);
-router.delete('/:id', auth_1.auth, auth_1.isAdmin, productsController.deleteProduct);
+router.post('/', auth_1.auth, auth_2.isAdmin, products_controller_1.createProduct);
+router.put('/:id', auth_1.auth, auth_2.isAdmin, products_controller_1.updateProduct);
+router.delete('/:id', auth_1.auth, auth_2.isAdmin, products_controller_1.deleteProduct);
+// ===== NOVAS ROTAS PARA VARIAÇÕES =====
+// Obter variações de um produto
+router.get('/:productId/variants', products_controller_1.getProductVariants);
+// Criar uma variação
+router.post('/:productId/variants', auth_1.auth, auth_2.isAdmin, products_controller_1.createProductVariant);
+// Criar múltiplas variações de uma vez
+router.post('/:productId/variants/batch', auth_1.auth, auth_2.isAdmin, products_controller_1.createMultipleVariants);
+// Atualizar uma variação
+router.put('/:productId/variants/:variantId', auth_1.auth, auth_2.isAdmin, products_controller_1.updateProductVariant);
+// Deletar uma variação
+router.delete('/:productId/variants/:variantId', auth_1.auth, auth_2.isAdmin, products_controller_1.deleteProductVariant);
 exports.default = router;

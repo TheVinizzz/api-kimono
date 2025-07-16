@@ -1,148 +1,102 @@
-# 📮 Configuração da Integração com os Correios
+# Configuração da API dos Correios
 
-Este documento explica como configurar a integração com a API oficial dos Correios para gerar códigos de rastreio automaticamente.
+Este documento descreve a configuração e uso da API dos Correios para consulta de CEP, rastreamento de objetos e outros serviços.
 
-## 🔧 Variáveis de Ambiente Necessárias
+## Requisitos
 
-Adicione as seguintes variáveis ao seu arquivo `.env`:
+Para utilizar a API dos Correios, você precisa:
 
-```bash
-# Configuração dos Correios
-CORREIOS_AMBIENTE=HOMOLOGACAO  # ou PRODUCAO
-CORREIOS_ID=00000000
-CORREIOS_CODIGO_ACESSO=xxxxxxxxxxxxxx
-CORREIOS_CONTRATO=000000000
-CORREIOS_CARTAO_POSTAGEM=0000000000
+1. Ter um contrato ativo com os Correios
+2. Credenciais de acesso (ID e código de acesso)
+3. Cartão de postagem ativo (para alguns serviços)
 
-# Dados do Remetente (sua empresa)
-CORREIOS_REMETENTE_NOME=KIMONO STORE
-CORREIOS_REMETENTE_RAZAO=KIMONO COMERCIO LTDA
+## Variáveis de Ambiente
+
+Configure as seguintes variáveis de ambiente no arquivo `.env`:
+
+```
+# Ambiente: PRODUCAO ou HOMOLOGACAO
+CORREIOS_AMBIENTE=PRODUCAO
+
+# Credenciais de acesso
+CORREIOS_ID=seu_id_correios
+CORREIOS_CODIGO_ACESSO=seu_codigo_acesso
+CORREIOS_CONTRATO=seu_numero_contrato
+CORREIOS_CARTAO_POSTAGEM=seu_cartao_postagem
+
+# Dados do remetente
+CORREIOS_REMETENTE_NOME=NOME_EMPRESA
+CORREIOS_REMETENTE_RAZAO=RAZAO_SOCIAL_EMPRESA
 CORREIOS_REMETENTE_CNPJ=00000000000000
-CORREIOS_REMETENTE_IE=000000000
-
-# Endereço do Remetente
-CORREIOS_REMETENTE_LOGRADOURO=Rua das Flores
+CORREIOS_REMETENTE_IE=000000000000
+CORREIOS_REMETENTE_LOGRADOURO=Rua Exemplo
 CORREIOS_REMETENTE_NUMERO=123
-CORREIOS_REMETENTE_COMPLEMENTO=Sala 45
+CORREIOS_REMETENTE_COMPLEMENTO=Sala 1
 CORREIOS_REMETENTE_BAIRRO=Centro
 CORREIOS_REMETENTE_CIDADE=São Paulo
 CORREIOS_REMETENTE_UF=SP
 CORREIOS_REMETENTE_CEP=01310100
-
-# Contato do Remetente
-CORREIOS_REMETENTE_TELEFONE=11999999999
-CORREIOS_REMETENTE_EMAIL=contato@kimonostore.com
+CORREIOS_REMETENTE_TELEFONE=11999998888
+CORREIOS_REMETENTE_EMAIL=contato@empresa.com
 ```
 
-## 📋 Como Obter as Credenciais dos Correios
+## Serviços Disponíveis
 
-### 1. Contratar Serviço dos Correios
-Para usar a API oficial dos Correios, você precisa:
+A API dos Correios oferece diversos serviços, mas o acesso a cada um depende do seu contrato. Os principais serviços são:
 
-1. **Ter um CNPJ ativo**
-2. **Contratar um dos serviços**:
-   - PAC Contrato
-   - SEDEX Contrato
-   - Outros serviços postais
-3. **Solicitar acesso à API** junto aos Correios
+1. **Consulta de CEP** - Obter informações de endereço a partir do CEP
+2. **Rastreamento de objetos** - Consultar o status de entregas
+3. **Cálculo de preço e prazo** - Estimar o custo e tempo de entrega
+4. **Prepostagem** - Gerar etiquetas para envio
 
-### 2. Credenciais Necessárias
+## Autenticação
 
-- **CORREIOS_ID**: Identificador único fornecido pelos Correios
-- **CORREIOS_CODIGO_ACESSO**: Código de acesso para API
-- **CORREIOS_CONTRATO**: Número do seu contrato com os Correios
-- **CORREIOS_CARTAO_POSTAGEM**: Número do cartão de postagem
+A API dos Correios oferece diferentes métodos de autenticação:
 
-### 3. Ambientes
+1. **Autenticação direta** - Usando ID e código de acesso
+2. **Autenticação com cartão de postagem** - Usando ID, código de acesso e cartão de postagem
 
-- **HOMOLOGACAO**: Para testes (não gera códigos reais)
-- **PRODUCAO**: Para uso real (gera códigos válidos)
+Nossa implementação tenta primeiro a autenticação com cartão de postagem, pois ela oferece acesso a mais serviços, incluindo a API de CEP. Se falhar, tentamos a autenticação direta como fallback.
 
-## 🚀 Como Usar
+## Observações Importantes
 
-### 1. Testar Configuração
+1. **Acesso à API de CEP** - O acesso à API de CEP requer autenticação com cartão de postagem. A autenticação direta não tem permissão para acessar este serviço.
 
-```bash
-GET /api/correios/testar-conexao
-Authorization: Bearer <admin_token>
-```
+2. **Formato do CEP** - Os CEPs devem ser enviados sem formatação (apenas números, sem hífen).
 
-### 2. Gerar Código de Rastreio Manual
+3. **Ambiente de Homologação** - Para testes, use o ambiente de homologação (`CORREIOS_AMBIENTE=HOMOLOGACAO`).
 
-```bash
-POST /api/correios/gerar-rastreio/{orderId}
-Authorization: Bearer <admin_token>
-```
+4. **Limites de Consulta** - A API de CEP permite consultar até 20 CEPs por requisição.
 
-### 3. Processar Todos os Pedidos Pagos
+## Solução de Problemas
 
-```bash
-POST /api/correios/processar-pedidos
-Authorization: Bearer <admin_token>
-```
+### Erro 403 (Acesso não autorizado)
 
-### 4. Rastrear Objeto (Público)
+Se você receber um erro 403 ao tentar acessar um serviço, verifique:
 
-```bash
-GET /api/correios/rastrear/{codigoRastreio}
-```
+1. Se seu contrato tem acesso ao serviço específico
+2. Se você está usando o método de autenticação correto (alguns serviços exigem autenticação com cartão de postagem)
+3. Se suas credenciais estão corretas
 
-## ⚡ Funcionamento Automático
+### Erro 401 (Não autorizado)
 
-O sistema foi configurado para:
+Indica credenciais inválidas. Verifique seu ID e código de acesso.
 
-1. **Detectar pagamentos aprovados** automaticamente
-2. **Gerar códigos de rastreio** para pedidos pagos
-3. **Atualizar status** do pedido para "PROCESSING"
-4. **Armazenar código de rastreio** no banco de dados
+### Alternativas para Consulta de CEP
 
-## 🔄 Processo de Geração de Código
+Se você não tiver acesso à API de CEP dos Correios, considere usar alternativas gratuitas:
 
-1. Pedido é marcado como **PAID**
-2. Sistema verifica se pedido já tem código de rastreio
-3. Extrai dados do destinatário do pedido
-4. Calcula peso estimado dos produtos
-5. Cria prepostagem nos Correios
-6. Recebe código de rastreio (BR123456789BR)
-7. Atualiza pedido com código de rastreio
+1. **BrasilAPI** - `https://brasilapi.com.br/api/cep/v1/{cep}`
+2. **ViaCEP** - `https://viacep.com.br/ws/{cep}/json/`
 
-## 📊 Logs e Monitoramento
+## Testes
 
-O sistema gera logs detalhados:
+Para testar a integração com a API dos Correios, use os scripts:
 
-```
-📮 Gerando código de rastreio para pedido 123...
-✅ Prepostagem criada com sucesso: BR123456789BR
-```
+1. `test-correios-completo.js` - Testa diferentes métodos de autenticação e endpoints
+2. `test-cep-service.js` - Testa especificamente o serviço de CEP
 
-## ⚠️ Limitações e Considerações
+## Referências
 
-1. **Peso Estimado**: Sistema usa 400g por kimono como padrão
-2. **Dimensões**: Usa dimensões padrão de embalagem (30x25x5cm)
-3. **Serviço Padrão**: PAC (03298) para economia
-4. **Rate Limiting**: Aguarda 2s entre cada criação de prepostagem
-
-## 🛠️ Alternativas para Desenvolvimento
-
-Se você não tem contrato com os Correios ainda, pode:
-
-1. **Usar ambiente HOMOLOGACAO** (não gera códigos reais)
-2. **Implementar mock service** para desenvolvimento
-3. **Usar outros transportadores** como base
-
-## 📞 Suporte
-
-Para questões sobre:
-- **Credenciais dos Correios**: Entre em contato com os Correios
-- **Problemas técnicos**: Verifique os logs da aplicação
-- **Configuração**: Siga este guia passo a passo
-
-## 🔗 Links Úteis
-
-- [Portal dos Correios](https://www.correios.com.br/)
-- [Documentação da API dos Correios](https://www.correios.com.br/api-corporativa)
-- [Contratar Serviços dos Correios](https://www2.correios.com.br/empresas)
-
----
-
-**Importante**: Esta integração é com a **API oficial dos Correios** e requer contrato comercial. Para uso em produção, certifique-se de ter todas as credenciais válidas. 
+- [Documentação Oficial da API dos Correios](https://api.correios.com.br/)
+- [Documentação da API de CEP v3](https://api.correios.com.br/cep/v3/api-docs) 

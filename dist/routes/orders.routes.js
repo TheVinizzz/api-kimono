@@ -42,12 +42,20 @@ router.get('/user', auth_1.auth, ordersController.getUserOrders);
 router.get('/:id', auth_1.auth, ordersController.getOrderById);
 router.get('/:id/tracking', auth_1.auth, ordersController.getOrderTracking);
 router.post('/', auth_1.auth, ordersController.createOrder);
-// Rota para convidados (sem autenticação)
+// Rotas para convidados (sem autenticação)
 router.post('/guest', ordersController.createGuestOrder);
+router.get('/guest/:id', ordersController.getGuestOrderById);
+router.get('/guest/:id/status', ordersController.checkGuestOrderPaymentStatus);
 // Rotas de administrador
 router.get('/', auth_1.auth, auth_1.isAdmin, ordersController.getAllOrders);
 router.put('/:id/status', auth_1.auth, auth_1.isAdmin, ordersController.updateOrderStatus);
 router.put('/:id/tracking', auth_1.auth, auth_1.isAdmin, ordersController.updateTrackingInfo);
 router.post('/:id/shipment-updates', auth_1.auth, auth_1.isAdmin, ordersController.addShipmentUpdate);
 router.patch('/admin/status', auth_1.auth, auth_1.isAdmin, ordersController.adminUpdateOrderStatus);
+// ✅ NOVA ROTA: Cancelar pedidos expirados e restaurar estoque
+router.post('/admin/cancel-expired', auth_1.auth, auth_1.isAdmin, ordersController.cancelExpiredOrders);
+// ✅ NOVA ROTA: Testar redução de estoque
+router.post('/admin/test-reduce-stock/:orderId', auth_1.auth, auth_1.isAdmin, ordersController.testReduceStock);
+// ✅ NOVA ROTA: Consultar informações de estoque em tempo real
+router.get('/stock-info', ordersController.getStockInfo); // Rota pública para consulta de estoque
 exports.default = router;

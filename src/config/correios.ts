@@ -1,6 +1,6 @@
 export const CORREIOS_CONFIG = {
   // Ambiente: PRODUCAO ou HOMOLOGACAO
-  ambiente: process.env.CORREIOS_AMBIENTE || 'HOMOLOGACAO',
+  ambiente: process.env.CORREIOS_AMBIENTE || 'PRODUCAO',
   
   // Credenciais de acesso (obter junto aos Correios)
   idCorreios: process.env.CORREIOS_ID || '',
@@ -23,9 +23,9 @@ export const CORREIOS_CONFIG = {
       bairro: process.env.CORREIOS_REMETENTE_BAIRRO || '',
       cidade: process.env.CORREIOS_REMETENTE_CIDADE || '',
       uf: process.env.CORREIOS_REMETENTE_UF || '',
-      cep: process.env.CORREIOS_REMETENTE_CEP || ''
+      cep: process.env.CORREIOS_REMETENTE_CEP ? cleanCEP(process.env.CORREIOS_REMETENTE_CEP) : ''
     },
-    telefone: process.env.CORREIOS_REMETENTE_TELEFONE || '',
+    telefone: process.env.CORREIOS_REMETENTE_TELEFONE ? cleanPhone(process.env.CORREIOS_REMETENTE_TELEFONE) : '',
     email: process.env.CORREIOS_REMETENTE_EMAIL || ''
   },
   
@@ -39,9 +39,44 @@ export const CORREIOS_CONFIG = {
   // URLs da API
   urls: {
     homologacao: 'https://apihom.correios.com.br',
-    producao: 'https://api.correios.com.br'
+    producao: 'https://api.correios.com.br',
+    cwsHomologacao: 'https://cwshom.correios.com.br/api',
+    cwsProducao: 'https://cws.correios.com.br/api'
+  },
+  
+  // Endpoints específicos
+  endpoints: {
+    token: {
+      autentica: '/token/v1/autentica',
+      autenticaCartaoPostagem: '/token/v1/autentica/cartaopostagem'
+    },
+    cep: {
+      consulta: '/cep/v1/enderecos',
+      consultaV2: '/cep/v2/enderecos', // Novo endpoint v2 de consulta de CEP
+      consultaCepUnico: '/cep/v2/enderecos/', // Endpoint para consulta de um CEP específico (adicionar o CEP ao final)
+      listaUfs: '/cep/v1/ufs',
+      consultaUf: '/cep/v1/ufs/', // Adicionar a UF ao final
+      listaLocalidades: '/cep/v1/localidades',
+      listaLocalidadesUf: '/cep/v1/localidades/' // Adicionar a UF ao final
+    },
+    prepostagem: {
+      criar: '/prepostagem/v1/prepostagens' // Endpoint correto para produção
+    },
+    rastreamento: {
+      consulta: '/srorastro/v1/objetos'
+    }
   }
 };
+
+// Função para limpar o CEP removendo caracteres não numéricos
+function cleanCEP(cep: string): string {
+  return cep.replace(/\D/g, '');
+}
+
+// Função para limpar o telefone removendo caracteres não numéricos
+function cleanPhone(phone: string): string {
+  return phone.replace(/\D/g, '');
+}
 
 // Função para validar configurações
 export function validateCorreiosConfig(): boolean {

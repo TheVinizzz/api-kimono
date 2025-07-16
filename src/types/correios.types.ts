@@ -35,19 +35,35 @@ export interface CorreiosDimensoes {
 }
 
 export interface CorreiosVolume extends CorreiosDimensoes {
-  tipoObjeto: number; // 1=Envelope, 2=Pacote, 3=Rolo/Prisma
+  tipoObjeto: number | string; // 1=Envelope, 2=Pacote, 3=Rolo/Prisma ou '001', '002', '003'
   valorDeclarado?: number;
 }
 
 export interface CorreiosPrepostagemRequest {
   remetente: CorreiosRemetenteRequest;
   destinatario: CorreiosDestinatarioRequest;
-  servico: string; // código do serviço (PAC, SEDEX, etc)
+  servico?: string; // código do serviço (PAC, SEDEX, etc) - campo legado
+  codigoServico: string; // código do serviço para API v2
+  formatoObjeto: string | number; // 1=Envelope, 2=Pacote, 3=Rolo/Prisma ou '001', '002', '003'
+  peso: number; // peso total em gramas
   volumes: CorreiosVolume[];
   servicosAdicionais?: string[];
   numeroNotaFiscal?: string;
   valorNotaFiscal?: number;
   observacao?: string;
+  objetosProibidos: boolean | string; // declaração de que não contém objetos proibidos ('N'/'S' ou true/false)
+  declaracaoConteudo: {
+    itens: Array<{
+      descricao: string;
+      quantidade: number;
+      valor: number;
+    }>;
+  };
+  // Campos adicionais para conformidade
+  avisoRecebimento?: string;
+  maoPropria?: string;
+  numeroContrato?: string;
+  cartaoPostagem?: string;
 }
 
 export interface CorreiosPrepostagemResponse {
@@ -152,6 +168,78 @@ export interface CorreiosApiConfig {
 export interface CorreiosTokenResponse {
   token: string;
   expiresIn: number;
+  expiraEm: string; // Data ISO de expiração do token
   tokenType: string;
   ambiente: string;
+} 
+
+// Tipos para a API de CEP v2
+export interface CorreiosCepV2Response {
+  cep: string;
+  uf: string;
+  numeroLocalidade: number;
+  localidade: string;
+  logradouro: string;
+  tipoLogradouro: string;
+  nomeLogradouro: string;
+  numeroLogradouro?: string;
+  complemento?: string;
+  abreviatura?: string;
+  bairro: string;
+  numeroLocalidadeSuperior?: number;
+  localidadeSuperior?: string;
+  nome?: string;
+  siglaUnidade?: string;
+  tipoCEP?: number;
+  cepAnterior?: string;
+  distrito?: string;
+  cepUnidadeOperacional?: string;
+  lado?: string;
+  numeroInicial?: number;
+  numeroFinal?: number;
+  clique?: string;
+  caixasPostais?: CorreiosFaixaCaixaPostalResponse[];
+  locker?: string;
+  agenciaModular?: string;
+  txMsg?: string;
+  inSituacaoLocalidade?: string;
+  dtFinalVigencia?: string;
+}
+
+export interface CorreiosFaixaCaixaPostalResponse {
+  nuInicial: number;
+  nuFinal: number;
+}
+
+export interface CorreiosPagedModelEnderecoResponse {
+  itens: CorreiosCepV2Response;
+  links: CorreiosLink[];
+  page: CorreiosPagedModelInfo;
+}
+
+export interface CorreiosLink {
+  href: string;
+  hreflang?: string;
+  title?: string;
+  type?: string;
+  deprecation?: string;
+  profile?: string;
+  name?: string;
+  templated?: boolean;
+}
+
+export interface CorreiosPagedModelInfo {
+  size: number;
+  totalElements: number;
+  totalPages: number;
+  number: number;
+}
+
+export interface CorreiosMessageResponse {
+  msgs: string[];
+  date: string;
+  method: string;
+  path: string;
+  causa?: string;
+  stackTrace?: string;
 } 

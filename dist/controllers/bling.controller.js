@@ -12,10 +12,16 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.blingWebhook = exports.getBlingProductStock = exports.getBlingOrders = exports.getBlingProducts = exports.updateSyncConfig = exports.getSyncConfig = exports.syncOrderToBling = exports.syncAllProductsToBling = exports.syncProductToBling = void 0;
+exports.syncStockFromBling = exports.testBlingConnection = exports.getBlingProductsDetailed = exports.getBlingData = exports.checkOAuthStatus = exports.blingWebhook = exports.getBlingProductStock = exports.getBlingOrders = exports.getBlingProducts = exports.updateSyncConfig = exports.getSyncConfig = exports.syncOrderToBling = exports.syncAllProductsToBling = exports.syncProductToBling = void 0;
 const zod_1 = require("zod");
 const prisma_1 = __importDefault(require("../config/prisma"));
 const bling_service_1 = __importDefault(require("../services/bling.service"));
+// Importar funções do script OAuth
+const { makeAuthenticatedRequest, getCompanyInfo, getProducts, getCategories, getOrders, loadTokens, saveTokens, refreshAccessToken, isTokenExpired } = require('../../scripts/bling-oauth-complete');
+// Helper function to serialize BigInt values for JSON
+const serializeBigInt = (obj) => {
+    return JSON.parse(JSON.stringify(obj, (key, value) => typeof value === 'bigint' ? value.toString() : value));
+};
 // Schema para validação de webhook
 const webhookSchema = zod_1.z.object({
     evento: zod_1.z.string(),
@@ -323,26 +329,13 @@ exports.updateSyncConfig = updateSyncConfig;
 // Listar produtos do Bling
 const getBlingProducts = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 50;
-        const products = yield bling_service_1.default.getProducts(page, limit);
-        return res.json({
-            success: true,
-            products: products.data,
-            pagination: {
-                page: products.pagina,
-                limit: products.limite,
-                total: products.total
-            }
-        });
+        const products = yield bling_service_1.default.getAllProducts();
+        // Serializar BigInt antes de enviar resposta
+        const serializedProducts = serializeBigInt(products);
+        res.json({ success: true, data: serializedProducts });
     }
     catch (error) {
-        console.error('Erro ao buscar produtos do Bling:', error);
-        return res.status(500).json({
-            success: false,
-            message: 'Erro ao buscar produtos do Bling',
-            error: error.message
-        });
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 exports.getBlingProducts = getBlingProducts;
@@ -529,3 +522,412 @@ function handleStockChange(stockData) {
         }
     });
 }
+// ===================
+// OAUTH E TESTES
+// ===================
+// Verificar status da autenticação OAuth
+const checkOAuthStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const tokens = loadTokens();
+        if (!tokens) {
+            return res.json({
+                success: false,
+                authenticated: false,
+                message: 'Nenhum token OAuth encontrado. Execute a autenticação primeiro.',
+                authUrl: 'Execute: node scripts/bling-oauth-complete.js'
+            });
+        }
+        if (isTokenExpired(tokens)) {
+            return res.json({
+                success: false,
+                authenticated: false,
+                expired: true,
+                message: 'Token OAuth expirado. Execute a autenticação novamente.',
+                authUrl: 'Execute: node scripts/bling-oauth-complete.js'
+            });
+        }
+        return res.json({
+            success: true,
+            authenticated: true,
+            message: 'Autenticação OAuth válida',
+            tokenInfo: {
+                expiresAt: new Date(tokens.expires_at),
+                tokenType: tokens.token_type,
+                hasRefreshToken: !!tokens.refresh_token
+            }
+        });
+    }
+    catch (error) {
+        console.error('Erro ao verificar status OAuth:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor',
+            error: error.message
+        });
+    }
+});
+exports.checkOAuthStatus = checkOAuthStatus;
+// Obter dados completos do Bling (empresa, produtos, pedidos, etc.)
+const getBlingData = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k;
+    try {
+        // Verificar autenticação
+        const tokens = loadTokens();
+        if (!tokens || isTokenExpired(tokens)) {
+            return res.status(401).json({
+                success: false,
+                message: 'Token OAuth inválido ou expirado. Execute a autenticação primeiro.',
+                authRequired: true
+            });
+        }
+        const { includeCompany = true, includeProducts = true, includeCategories = true, includeOrders = true, includeContacts = true, includeStock = true, productLimit = 20, orderLimit = 10, contactLimit = 10 } = req.query;
+        const data = {
+            timestamp: new Date().toISOString(),
+            authenticated: true
+        };
+        // Obter informações da empresa
+        if (includeCompany === 'true') {
+            try {
+                const response = yield makeAuthenticatedRequest('/empresas');
+                if (response && response.statusCode === 200) {
+                    const companies = response.data.data || response.data;
+                    data.company = Array.isArray(companies) && companies.length > 0 ? companies[0] : null;
+                }
+            }
+            catch (error) {
+                console.error('Erro ao obter empresa:', error);
+                data.company = { error: 'Erro ao obter dados da empresa' };
+            }
+        }
+        // Obter produtos
+        if (includeProducts === 'true') {
+            try {
+                const response = yield makeAuthenticatedRequest(`/produtos?limite=${productLimit}&pagina=1`);
+                if (response && response.statusCode === 200) {
+                    data.products = {
+                        items: response.data.data || response.data,
+                        pagination: response.data.pagination || null
+                    };
+                }
+            }
+            catch (error) {
+                console.error('Erro ao obter produtos:', error);
+                data.products = { error: 'Erro ao obter produtos' };
+            }
+        }
+        // Obter categorias
+        if (includeCategories === 'true') {
+            try {
+                const response = yield makeAuthenticatedRequest('/categorias');
+                if (response && response.statusCode === 200) {
+                    data.categories = {
+                        items: response.data.data || response.data,
+                        pagination: response.data.pagination || null
+                    };
+                }
+            }
+            catch (error) {
+                console.error('Erro ao obter categorias:', error);
+                data.categories = { error: 'Erro ao obter categorias' };
+            }
+        }
+        // Obter pedidos
+        if (includeOrders === 'true') {
+            try {
+                const response = yield makeAuthenticatedRequest(`/pedidos/vendas?limite=${orderLimit}&pagina=1`);
+                if (response && response.statusCode === 200) {
+                    data.orders = {
+                        items: response.data.data || response.data,
+                        pagination: response.data.pagination || null
+                    };
+                }
+            }
+            catch (error) {
+                console.error('Erro ao obter pedidos:', error);
+                data.orders = { error: 'Erro ao obter pedidos' };
+            }
+        }
+        // Obter contatos
+        if (includeContacts === 'true') {
+            try {
+                const response = yield makeAuthenticatedRequest(`/contatos?limite=${contactLimit}&pagina=1`);
+                if (response && response.statusCode === 200) {
+                    data.contacts = {
+                        items: response.data.data || response.data,
+                        pagination: response.data.pagination || null
+                    };
+                }
+            }
+            catch (error) {
+                console.error('Erro ao obter contatos:', error);
+                data.contacts = { error: 'Erro ao obter contatos' };
+            }
+        }
+        // Obter estoque
+        if (includeStock === 'true') {
+            try {
+                const response = yield makeAuthenticatedRequest('/estoques');
+                if (response && response.statusCode === 200) {
+                    data.stock = {
+                        items: response.data.data || response.data,
+                        pagination: response.data.pagination || null
+                    };
+                }
+            }
+            catch (error) {
+                console.error('Erro ao obter estoque:', error);
+                data.stock = { error: 'Erro ao obter estoque' };
+            }
+        }
+        // Estatísticas resumidas
+        data.summary = {
+            companyConfigured: !!data.company && !data.company.error,
+            totalProducts: ((_b = (_a = data.products) === null || _a === void 0 ? void 0 : _a.items) === null || _b === void 0 ? void 0 : _b.length) || 0,
+            totalCategories: ((_d = (_c = data.categories) === null || _c === void 0 ? void 0 : _c.items) === null || _d === void 0 ? void 0 : _d.length) || 0,
+            totalOrders: ((_f = (_e = data.orders) === null || _e === void 0 ? void 0 : _e.items) === null || _f === void 0 ? void 0 : _f.length) || 0,
+            totalContacts: ((_h = (_g = data.contacts) === null || _g === void 0 ? void 0 : _g.items) === null || _h === void 0 ? void 0 : _h.length) || 0,
+            totalStockItems: ((_k = (_j = data.stock) === null || _j === void 0 ? void 0 : _j.items) === null || _k === void 0 ? void 0 : _k.length) || 0
+        };
+        return res.json({
+            success: true,
+            message: 'Dados do Bling obtidos com sucesso',
+            data
+        });
+    }
+    catch (error) {
+        console.error('Erro ao obter dados do Bling:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor',
+            error: error.message
+        });
+    }
+});
+exports.getBlingData = getBlingData;
+// Obter apenas produtos do Bling com filtros
+const getBlingProductsDetailed = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        // Verificar autenticação
+        const tokens = loadTokens();
+        if (!tokens || isTokenExpired(tokens)) {
+            return res.status(401).json({
+                success: false,
+                message: 'Token OAuth inválido ou expirado',
+                authRequired: true
+            });
+        }
+        const { page = 1, limit = 20, search = '', category = '', active = '' } = req.query;
+        let endpoint = `/produtos?limite=${limit}&pagina=${page}`;
+        // Adicionar filtros se fornecidos
+        if (search)
+            endpoint += `&pesquisa=${encodeURIComponent(search)}`;
+        if (category)
+            endpoint += `&categoria=${category}`;
+        if (active)
+            endpoint += `&situacao=${active === 'true' ? 'Ativo' : 'Inativo'}`;
+        const response = yield makeAuthenticatedRequest(endpoint);
+        if (response && response.statusCode === 200) {
+            const products = response.data.data || response.data;
+            const pagination = response.data.pagination || null;
+            // Enriquecer dados dos produtos
+            const enrichedProducts = products.map((product) => {
+                var _a, _b, _c, _d, _e;
+                return ({
+                    id: product.id,
+                    name: product.nome,
+                    code: product.codigo,
+                    price: product.preco,
+                    stock: ((_b = (_a = product.estoques) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.saldoFisico) || 0,
+                    virtualStock: ((_d = (_c = product.estoques) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.saldoVirtual) || 0,
+                    category: ((_e = product.categoria) === null || _e === void 0 ? void 0 : _e.descricao) || 'Sem categoria',
+                    active: product.situacao === 'Ativo',
+                    imageUrl: product.imagemURL || null,
+                    description: product.descricao || '',
+                    createdAt: product.dataCriacao,
+                    updatedAt: product.dataAlteracao
+                });
+            });
+            return res.json({
+                success: true,
+                message: `${enrichedProducts.length} produtos encontrados`,
+                data: {
+                    products: enrichedProducts,
+                    pagination,
+                    filters: {
+                        page: parseInt(page),
+                        limit: parseInt(limit),
+                        search,
+                        category,
+                        active
+                    }
+                }
+            });
+        }
+        else {
+            return res.status(400).json({
+                success: false,
+                message: 'Erro ao obter produtos do Bling',
+                statusCode: response === null || response === void 0 ? void 0 : response.statusCode
+            });
+        }
+    }
+    catch (error) {
+        console.error('Erro ao obter produtos detalhados:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor',
+            error: error.message
+        });
+    }
+});
+exports.getBlingProductsDetailed = getBlingProductsDetailed;
+// Testar conectividade com Bling
+const testBlingConnection = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        // Verificar autenticação
+        const tokens = loadTokens();
+        if (!tokens) {
+            return res.json({
+                success: false,
+                connected: false,
+                message: 'Nenhum token OAuth encontrado',
+                authRequired: true
+            });
+        }
+        if (isTokenExpired(tokens)) {
+            return res.json({
+                success: false,
+                connected: false,
+                message: 'Token OAuth expirado',
+                expired: true,
+                authRequired: true
+            });
+        }
+        // Testar conexão fazendo uma requisição simples
+        const response = yield makeAuthenticatedRequest('/empresas');
+        if (response && response.statusCode === 200) {
+            const companies = response.data.data || response.data;
+            const company = Array.isArray(companies) && companies.length > 0 ? companies[0] : null;
+            return res.json({
+                success: true,
+                connected: true,
+                message: 'Conexão com Bling estabelecida com sucesso',
+                data: {
+                    apiStatus: 'OK',
+                    responseTime: new Date().toISOString(),
+                    company: company ? {
+                        name: company.nome,
+                        email: company.email,
+                        id: company.id
+                    } : null,
+                    tokenInfo: {
+                        type: tokens.token_type,
+                        expiresAt: new Date(tokens.expires_at),
+                        hasRefreshToken: !!tokens.refresh_token
+                    }
+                }
+            });
+        }
+        else {
+            return res.json({
+                success: false,
+                connected: false,
+                message: 'Falha na conexão com Bling',
+                statusCode: response === null || response === void 0 ? void 0 : response.statusCode,
+                error: response === null || response === void 0 ? void 0 : response.data
+            });
+        }
+    }
+    catch (error) {
+        console.error('Erro ao testar conexão:', error);
+        return res.status(500).json({
+            success: false,
+            connected: false,
+            message: 'Erro ao testar conexão com Bling',
+            error: error.message
+        });
+    }
+});
+exports.testBlingConnection = testBlingConnection;
+// Sincronizar estoque específico do Bling para o sistema local
+const syncStockFromBling = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
+    try {
+        const { productId } = req.params;
+        // Verificar autenticação
+        const tokens = loadTokens();
+        if (!tokens || isTokenExpired(tokens)) {
+            return res.status(401).json({
+                success: false,
+                message: 'Token OAuth inválido ou expirado',
+                authRequired: true
+            });
+        }
+        if (!productId) {
+            return res.status(400).json({
+                success: false,
+                message: 'ID do produto é obrigatório'
+            });
+        }
+        // Buscar produto no Bling
+        const response = yield makeAuthenticatedRequest(`/produtos/${productId}`);
+        if (response && response.statusCode === 200) {
+            const blingProduct = response.data.data || response.data;
+            // Buscar produto local correspondente
+            const localProduct = yield prisma_1.default.product.findFirst({
+                where: {
+                    OR: [
+                        { id: parseInt(productId) },
+                        { name: blingProduct.nome }
+                    ]
+                }
+            });
+            if (!localProduct) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Produto não encontrado no sistema local'
+                });
+            }
+            // Atualizar estoque local com dados do Bling
+            const newStock = ((_b = (_a = blingProduct.estoques) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.saldoFisico) || 0;
+            const updatedProduct = yield prisma_1.default.product.update({
+                where: { id: localProduct.id },
+                data: {
+                    stock: newStock,
+                    price: blingProduct.preco || localProduct.price
+                }
+            });
+            return res.json({
+                success: true,
+                message: 'Estoque sincronizado com sucesso',
+                data: {
+                    productId: localProduct.id,
+                    productName: localProduct.name,
+                    oldStock: localProduct.stock,
+                    newStock: newStock,
+                    blingData: {
+                        id: blingProduct.id,
+                        name: blingProduct.nome,
+                        price: blingProduct.preco,
+                        stock: newStock
+                    }
+                }
+            });
+        }
+        else {
+            return res.status(404).json({
+                success: false,
+                message: 'Produto não encontrado no Bling'
+            });
+        }
+    }
+    catch (error) {
+        console.error('Erro ao sincronizar estoque:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor',
+            error: error.message
+        });
+    }
+});
+exports.syncStockFromBling = syncStockFromBling;

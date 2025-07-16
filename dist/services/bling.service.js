@@ -103,15 +103,12 @@ class BlingService {
     // ===================
     // Listar produtos
     getProducts() {
-        return __awaiter(this, arguments, void 0, function* (page = 1, limit = 50) {
+        return __awaiter(this, arguments, void 0, function* (page = 1, limit = 50, filters = {}) {
             const config = {
                 method: 'GET',
                 url: `${this.apiUrl}/Api/v3/produtos`,
                 headers: this.getHeaders(),
-                params: {
-                    pagina: page,
-                    limite: limit
-                }
+                params: Object.assign({ pagina: page, limite: limit }, filters)
             };
             return this.makeRequest(config);
         });
@@ -498,6 +495,24 @@ class BlingService {
     // Obter configuração atual
     getSyncConfig() {
         return this.syncConfig;
+    }
+    getAllProducts() {
+        return __awaiter(this, void 0, void 0, function* () {
+            let allProducts = [];
+            let page = 1;
+            let hasMore = true;
+            while (hasMore) {
+                const response = yield this.getProducts(page);
+                if (response && response.data && response.data.length > 0) {
+                    allProducts = allProducts.concat(response.data);
+                    page++;
+                }
+                else {
+                    hasMore = false;
+                }
+            }
+            return allProducts;
+        });
     }
 }
 // Exportar instância única

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import mercadoPagoService from '../services/mercadopago.service';
+import webSocketService from '../services/websocket.service';
 
 const prisma = new PrismaClient();
 
@@ -261,6 +262,19 @@ export const createOrder = async (req: Request, res: Response) => {
       
       return order;
     });
+    
+    // Notificar via WebSocket sobre novo pedido
+    try {
+      webSocketService.notifyOrderCreated({
+        id: newOrder.id,
+        customerName: 'Cliente',
+        total: newOrder.total,
+        status: newOrder.status,
+        createdAt: newOrder.createdAt
+      });
+    } catch (error) {
+      console.error('Erro ao enviar notificação WebSocket:', error);
+    }
     
     return res.status(201).json(newOrder);
   } catch (error) {
@@ -687,6 +701,23 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
       }
     }
     
+    // Notificar via WebSocket sobre mudança de status
+    try {
+      webSocketService.notifyOrderStatusChanged(updatedOrder, currentOrder.status);
+      
+      // Notificação especial para pedidos pagos
+      if (status === 'PAID' && currentOrder.status !== 'PAID') {
+        webSocketService.notifyOrderPaid({
+          id: updatedOrder.id,
+          customerName: 'Cliente',
+          total: updatedOrder.total,
+          paymentMethod: updatedOrder.paymentMethod || 'Não informado'
+        });
+      }
+    } catch (error) {
+      console.error('Erro ao enviar notificação WebSocket:', error);
+    }
+    
     return res.json({
       ...updatedOrder,
       stockRestored: shouldRestoreStock
@@ -757,6 +788,23 @@ export const adminUpdateOrderStatus = async (req: Request, res: Response) => {
         console.error(`❌ [ADMIN] Falha ao restaurar estoque do pedido ${orderId}`);
         // Não falhar a operação, apenas registrar o erro
       }
+    }
+    
+    // Notificar via WebSocket sobre mudança de status (admin)
+    try {
+      webSocketService.notifyOrderStatusChanged(updatedOrder, currentOrder.status);
+      
+      // Notificação especial para pedidos pagos
+      if (status === 'PAID' && currentOrder.status !== 'PAID') {
+        webSocketService.notifyOrderPaid({
+          id: updatedOrder.id,
+          customerName: updatedOrder.customerName || 'Cliente',
+          total: updatedOrder.total,
+          paymentMethod: updatedOrder.paymentMethod || 'Não informado'
+        });
+      }
+    } catch (error) {
+      console.error('Erro ao enviar notificação WebSocket:', error);
     }
     
     return res.json({
