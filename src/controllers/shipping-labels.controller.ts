@@ -444,6 +444,24 @@ export const generateShippingLabel = async (req: Request, res: Response) => {
       });
     }
 
+    // ✅ Verificar se o pedido tem código de rastreio válido dos Correios
+    if (!order.trackingNumber || order.trackingNumber.trim() === '' || 
+        order.trackingNumber === 'Não disponível' || order.trackingNumber === 'Ainda não disponível') {
+      return res.status(400).json({
+        success: false,
+        error: 'Pedido não possui código de rastreio válido dos Correios'
+      });
+    }
+
+    // Validar formato do código dos Correios (13 caracteres: XX123456789XX)
+    const correiosPattern = /^[A-Z]{2}[0-9]{9}[A-Z]{2}$/;
+    if (!correiosPattern.test(order.trackingNumber.trim())) {
+      return res.status(400).json({
+        success: false,
+        error: 'Código de rastreio não está no formato válido dos Correios'
+      });
+    }
+
     // Processar endereço de entrega usando a mesma lógica da lista
     let shippingData;
     const addressString = order.shippingAddress?.trim();
@@ -694,11 +712,19 @@ export const generateBatchLabels = async (req: Request, res: Response) => {
       });
     }
 
-    // Buscar pedidos
+    // Buscar pedidos com código de rastreio válido
     const orders = await prisma.order.findMany({
       where: {
         id: { in: orderIds.map(id => Number(id)) },
-        shippingAddress: { not: null }
+        shippingAddress: { not: null },
+        trackingNumber: { not: null },
+        NOT: {
+          OR: [
+            { trackingNumber: '' },
+            { trackingNumber: 'Não disponível' },
+            { trackingNumber: 'Ainda não disponível' }
+          ]
+        }
       },
       include: {
         items: {
@@ -732,8 +758,23 @@ export const generateBatchLabels = async (req: Request, res: Response) => {
       });
     }
 
+    // ✅ Filtrar apenas pedidos com código de rastreio válido dos Correios
+    const correiosPattern = /^[A-Z]{2}[0-9]{9}[A-Z]{2}$/;
+    const validOrders = orders.filter(order => {
+      return order.trackingNumber && correiosPattern.test(order.trackingNumber.trim());
+    });
+
+    if (validOrders.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Nenhum pedido possui código de rastreio válido dos Correios'
+      });
+    }
+
+    console.log(`✅ Gerando etiquetas para ${validOrders.length} pedidos com códigos válidos dos Correios`);
+
     // Gerar PDF com múltiplas etiquetas
-    const pdfBuffer = await generateBatchLabelsPDF(orders);
+    const pdfBuffer = await generateBatchLabelsPDF(validOrders);
 
     // Configurar headers para download
     res.setHeader('Content-Type', 'application/pdf');
@@ -770,8 +811,8 @@ async function generateLabelPDF(order: any, shippingData: any, totalWeight: numb
       // Buscar dados da empresa das configurações
       const senderInfo = await getSenderInfo();
 
-      // Gerar código QR para rastreamento
-      const trackingCode = `KIMONO${order.id.toString().padStart(8, '0')}`;
+      // Usar código de rastreio REAL dos Correios (se disponível) ou gerar código temporário
+      const trackingCode = order.trackingNumber || `TEMP${order.id.toString().padStart(8, '0')}`;
       const qrCodeUrl = await QRCode.toDataURL(trackingCode);
       const qrCodeBuffer = Buffer.from(qrCodeUrl.split(',')[1], 'base64');
 
@@ -816,18 +857,28 @@ async function generateLabelPDF(order: any, shippingData: any, totalWeight: numb
       doc.text(`Peso aprox.: ${totalWeight.toFixed(1)}kg`, 15, 205);
       doc.text(`Itens: ${order.items.length}`, 15, 215);
 
-      // Código de barras (simulado com código de rastreamento)
+      // Código de rastreamento dos Correios (se disponível)
       doc.fontSize(10).font('Helvetica-Bold');
-      doc.text(trackingCode, 15, 230);
+      if (order.trackingNumber) {
+        doc.text(`CORREIOS: ${order.trackingNumber}`, 15, 230);
+      } else {
+        doc.text(`TEMP: ${trackingCode}`, 15, 230);
+      }
 
       // QR Code
       doc.image(qrCodeBuffer, 200, 200, { width: 60, height: 60 });
 
       // Código de rastreamento legível
       doc.fontSize(6).font('Helvetica');
-      doc.text('Código de rastreamento:', 15, 270);
-      doc.fontSize(8).font('Helvetica-Bold');
-      doc.text(trackingCode, 15, 280);
+      if (order.trackingNumber) {
+        doc.text('Código de rastreamento Correios:', 15, 270);
+        doc.fontSize(8).font('Helvetica-Bold');
+        doc.text(order.trackingNumber, 15, 280);
+      } else {
+        doc.text('Código temporário (aguardando Correios):', 15, 270);
+        doc.fontSize(8).font('Helvetica-Bold');
+        doc.text(trackingCode, 15, 280);
+      }
 
       // Instruções de manuseio
       doc.fontSize(6).font('Helvetica');
@@ -866,6 +917,9 @@ async function generateBatchLabelsPDF(orders: any[]): Promise<Buffer> {
       // Buscar dados da empresa das configurações
       const senderInfo = await getSenderInfo();
 
+      // Padrão para validar códigos dos Correios
+      const correiosPattern = /^[A-Z]{2}[0-9]{9}[A-Z]{2}$/;
+
       // Processar cada pedido
       for (let i = 0; i < orders.length; i++) {
         const order = orders[i];
@@ -876,6 +930,12 @@ async function generateBatchLabelsPDF(orders: any[]): Promise<Buffer> {
         
         if (!addressString || addressString === '{}') {
           console.error(`Endereço vazio para pedido ${order.id}`);
+          continue;
+        }
+
+        // ✅ Validar código de rastreio antes de processar
+        if (!order.trackingNumber || !correiosPattern.test(order.trackingNumber.trim())) {
+          console.error(`Código de rastreio inválido para pedido ${order.id}: ${order.trackingNumber}`);
           continue;
         }
 
@@ -1007,7 +1067,7 @@ async function generateBatchLabelsPDF(orders: any[]): Promise<Buffer> {
         }
 
         // Gerar conteúdo da etiqueta (similar ao individual, mas ajustado para A4)
-        const trackingCode = `KIMONO${order.id.toString().padStart(8, '0')}`;
+        const trackingCode = order.trackingNumber || `TEMP${order.id.toString().padStart(8, '0')}`;
         
         // Título da etiqueta
         doc.fontSize(10).font('Helvetica-Bold');
@@ -1044,7 +1104,13 @@ async function generateBatchLabelsPDF(orders: any[]): Promise<Buffer> {
         doc.fontSize(7).font('Helvetica');
         doc.text(`Data: ${new Date(order.createdAt).toLocaleDateString('pt-BR')}`, 50, 240);
         doc.text(`Peso: ${totalWeight.toFixed(1)}kg`, 50, 250);
-        doc.text(`Código: ${trackingCode}`, 50, 260);
+        
+        // Código de rastreamento real ou temporário
+        if (order.trackingNumber) {
+          doc.text(`Código Correios: ${order.trackingNumber}`, 50, 260);
+        } else {
+          doc.text(`Código Temp: ${trackingCode}`, 50, 260);
+        }
 
         // Linha separadora para próxima etiqueta
         if (i < orders.length - 1) {
