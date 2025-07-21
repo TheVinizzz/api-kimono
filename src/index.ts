@@ -317,7 +317,7 @@ setInterval(() => {
   const uptime = Math.floor((Date.now() - startTime)/1000);
   const memory = process.memoryUsage();
   console.log(`📊 Status: ${uptime}s uptime | ${requestCount} requests | ${healthCheckCount} health checks | ${Math.floor(memory.rss/1024/1024)}MB RAM`);
-}, 60000);
+}, 60000); 
 
 // Job agendado para processar pedidos pagos e gerar códigos de rastreio automaticamente
 setInterval(async () => {

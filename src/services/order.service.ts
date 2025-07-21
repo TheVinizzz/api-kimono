@@ -338,7 +338,7 @@ class OrderService {
   async gerarCodigoRastreio(orderId: number): Promise<{ trackingNumber: string }> {
     try {
       console.log(`📦 Gerando código de rastreio para pedido ${orderId}`);
-      
+
       // Buscar pedido com endereço
       const pedido = await prisma.order.findUnique({
         where: { id: orderId },
@@ -386,7 +386,7 @@ class OrderService {
         console.log(`⚠️ Pedido ${orderId} já possui código de rastreio válido: ${pedido.trackingNumber}`);
         return { trackingNumber: pedido.trackingNumber };
       }
-      
+
       // Verificar se o pedido está pago
       if (pedido.status !== 'PAID' && pedido.paymentStatus !== 'PAID') {
         throw new Error(`Pedido ${orderId} não está pago. Status: ${pedido.status}, PaymentStatus: ${pedido.paymentStatus}`);
@@ -431,7 +431,7 @@ class OrderService {
           console.log(`✅ Nome do cliente atualizado no pedido ${orderId}`);
         }
       }
-      
+
       // Obter endereço do pedido com melhor tratamento
       let endereco: any = null;
       
@@ -456,7 +456,7 @@ class OrderService {
           throw new Error(`Endereço do pedido ${orderId} não é válido e não pode ser processado`);
         }
       }
-      
+
       // Validar campos obrigatórios do endereço
       if (!endereco || !endereco.zipCode) {
         throw new Error(`Endereço do pedido ${orderId} não possui CEP`);
@@ -542,7 +542,7 @@ class OrderService {
       
       const codigoRastreio = resultado.codigoObjeto;
       console.log(`✅ Código de rastreio gerado com sucesso para o pedido ${orderId}: ${codigoRastreio}`);
-      
+
       // Atualizar pedido com código de rastreio
       await prisma.order.update({
         where: { id: orderId },
@@ -552,7 +552,7 @@ class OrderService {
           updatedAt: new Date()
         }
       });
-      
+
       // Enviar e-mail para o cliente com o código de rastreio
       try {
         await this.enviarEmailRastreio(pedido, codigoRastreio);
@@ -562,7 +562,7 @@ class OrderService {
       }
       
       return { trackingNumber: codigoRastreio };
-      
+
     } catch (error) {
       console.error(`❌ Erro ao gerar código de rastreio para o pedido ${orderId}:`, error);
       throw error;
@@ -640,9 +640,9 @@ class OrderService {
           // Deve ter status PAID E paymentStatus PAID
           AND: [
             {
-              OR: [
-                { status: 'PAID' },
-                { paymentStatus: 'PAID' }
+          OR: [
+            { status: 'PAID' },
+            { paymentStatus: 'PAID' }
               ]
             },
             {
@@ -731,7 +731,7 @@ class OrderService {
             continue;
           }
 
-          await this.gerarCodigoRastreio(pedido.id);
+        await this.gerarCodigoRastreio(pedido.id);
           processados++;
           console.log(`✅ Pedido ${pedido.id} processado com sucesso (${processados}/${pedidosSemRastreio.length})`);
           

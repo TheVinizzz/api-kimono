@@ -1054,4 +1054,4 @@ export class CorreiosService {
 
 // Instância singleton
 export const correiosService = new CorreiosService();
-export default CorreiosService;
+export default CorreiosService; 

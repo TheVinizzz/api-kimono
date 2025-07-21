@@ -876,8 +876,8 @@ async function generateLabelPDF(order: any, shippingData: any, totalWeight: numb
         doc.text(order.trackingNumber, 15, 280);
       } else {
         doc.text('Código temporário (aguardando Correios):', 15, 270);
-        doc.fontSize(8).font('Helvetica-Bold');
-        doc.text(trackingCode, 15, 280);
+      doc.fontSize(8).font('Helvetica-Bold');
+      doc.text(trackingCode, 15, 280);
       }
 
       // Instruções de manuseio

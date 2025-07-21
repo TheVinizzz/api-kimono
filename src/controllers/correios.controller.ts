@@ -31,15 +31,15 @@ export const gerarCodigoRastreio = async (req: Request, res: Response) => {
         error: 'ID do pedido inválido' 
       });
     }
-    
+
     const result = await orderService.gerarCodigoRastreio(Number(orderId));
-    
+
     return res.json({
       success: true,
       trackingNumber: result.trackingNumber,
       message: 'Código de rastreio gerado com sucesso'
     });
-    
+
   } catch (error: any) {
     console.error('Erro ao gerar código de rastreio:', error);
     return res.status(500).json({ 
@@ -150,7 +150,7 @@ export const testarConexao = async (req: Request, res: Response) => {
         message: 'Verifique se todas as variáveis de ambiente dos Correios estão configuradas'
       });
     }
-    
+
     const conexaoOk = await correiosService.testarConexao();
     
     if (!conexaoOk) {
@@ -160,12 +160,12 @@ export const testarConexao = async (req: Request, res: Response) => {
         message: 'Verifique suas credenciais e tente novamente'
       });
     }
-    
+
     return res.json({
       success: true,
       message: 'Conexão com API dos Correios estabelecida com sucesso'
     });
-    
+
   } catch (error: any) {
     console.error('Erro ao testar conexão com Correios:', error);
     return res.status(500).json({ 
@@ -279,15 +279,15 @@ export const rastrearObjeto = async (req: Request, res: Response) => {
         error: 'Código de rastreio não fornecido' 
       });
     }
-    
+
     const resultado = await correiosService.rastrearObjeto(codigoRastreio);
-    
+
     return res.json({
       success: true,
       codigoRastreio,
       rastreamento: resultado
     });
-    
+
   } catch (error: any) {
     console.error('Erro ao rastrear objeto:', error);
     return res.status(500).json({ 
@@ -316,7 +316,7 @@ export const obterHistoricoJob = async (_req: Request, res: Response) => {
       message: error.message
     });
   }
-};
+}; 
 
 /**
  * Salvar uma execução no histórico de jobs
