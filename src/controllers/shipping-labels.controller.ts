@@ -48,6 +48,7 @@ export const getPendingShippingLabels = async (req: Request, res: Response) => {
     tenDaysAgo.setDate(tenDaysAgo.getDate() - 10);
 
     // Buscar apenas pedidos que foram processados pelos Correios (têm código de rastreio válido)
+    // ✅ EXCLUIR pedidos de retirada local
     const orders = await prisma.order.findMany({
       where: {
         AND: [
@@ -66,6 +67,12 @@ export const getPendingShippingLabels = async (req: Request, res: Response) => {
             }
           },
           { total: { gt: 0 } },
+          // ✅ EXCLUIR pedidos de retirada local
+          {
+            NOT: {
+              shippingMethod: 'LOCAL_PICKUP'
+            }
+          },
           // ✅ APENAS pedidos com código de rastreio VÁLIDO dos Correios
           {
             trackingNumber: {
@@ -437,6 +444,14 @@ export const generateShippingLabel = async (req: Request, res: Response) => {
       });
     }
 
+    // ✅ VERIFICAR SE É RETIRADA LOCAL - NÃO GERAR ETIQUETA
+    if (order.shippingMethod === 'LOCAL_PICKUP') {
+      return res.status(400).json({
+        success: false,
+        error: 'Pedidos de retirada local não precisam de etiqueta de envio'
+      });
+    }
+
     if (!order.shippingAddress) {
       return res.status(400).json({
         success: false,
@@ -712,17 +727,19 @@ export const generateBatchLabels = async (req: Request, res: Response) => {
       });
     }
 
-    // Buscar pedidos com código de rastreio válido
+    // Buscar pedidos com código de rastreio válido (excluindo retirada local)
     const orders = await prisma.order.findMany({
       where: {
         id: { in: orderIds.map(id => Number(id)) },
         shippingAddress: { not: null },
         trackingNumber: { not: null },
+        // ✅ EXCLUIR pedidos de retirada local
         NOT: {
           OR: [
             { trackingNumber: '' },
             { trackingNumber: 'Não disponível' },
-            { trackingNumber: 'Ainda não disponível' }
+            { trackingNumber: 'Ainda não disponível' },
+            { shippingMethod: 'LOCAL_PICKUP' }
           ]
         }
       },

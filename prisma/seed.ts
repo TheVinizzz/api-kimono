@@ -14,31 +14,31 @@ async function main() {
   const appSettings = [
     {
       key: 'shipping_origin_zipcode',
-      value: '01310-100',
+      value: '04551-070',
       description: 'CEP de origem para cálculos de frete',
       category: 'shipping'
     },
     {
       key: 'shipping_origin_name',
-      value: 'Kimono Store',
+      value: 'Kimono Store - Artes Marciais',
       description: 'Nome da empresa remetente',
       category: 'shipping'
     },
     {
       key: 'shipping_origin_address',
-      value: 'Rua das Flores, 123',
+      value: 'Rua das Artes Marciais, 456',
       description: 'Endereço da empresa remetente',
       category: 'shipping'
     },
     {
       key: 'shipping_origin_complement',
-      value: 'Sala 45',
+      value: 'Loja 1',
       description: 'Complemento do endereço da empresa',
       category: 'shipping'
     },
     {
       key: 'shipping_origin_neighborhood',
-      value: 'Centro',
+      value: 'Vila Olímpia',
       description: 'Bairro da empresa remetente',
       category: 'shipping'
     },
@@ -56,8 +56,20 @@ async function main() {
     },
     {
       key: 'shipping_origin_phone',
-      value: '(11) 99999-9999',
+      value: '(11) 98765-4321',
       description: 'Telefone da empresa remetente',
+      category: 'shipping'
+    },
+    {
+      key: 'shipping_origin_email',
+      value: 'contato@kimonostore.com.br',
+      description: 'E-mail da empresa remetente',
+      category: 'shipping'
+    },
+    {
+      key: 'shipping_origin_cnpj',
+      value: '12.345.678/0001-90',
+      description: 'CNPJ da empresa remetente',
       category: 'shipping'
     }
   ];

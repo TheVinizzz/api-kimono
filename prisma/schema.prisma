@@ -121,6 +121,8 @@ model Order {
   customerPhone     String?
   customerDocument  String?          // CPF/CNPJ do cliente
   shippingAddress   String?
+  shippingMethod    String?          // STANDARD, EXPRESS, LOCAL_PICKUP
+  shippingCost      Decimal?         @db.Decimal(10, 2) // Custo do frete
   labelPrinted      Boolean          @default(false) // Indica se a etiqueta de envio foi impressa
   labelPrintedAt    DateTime?        // Data/hora da impressão da etiqueta
   user              User?            @relation(fields: [userId], references: [id])
@@ -131,6 +133,7 @@ model Order {
   @@index([paymentId])
   @@index([customerEmail])
   @@index([labelPrinted])
+  @@index([shippingMethod])
 }
 
 model OrderItem {
@@ -211,15 +214,15 @@ model AppSettings {
   category           String    @default("general")
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
-  originCompanyName  String    @default("Sua Empresa")
-  originStreet       String    @default("Rua Exemplo, 123")
-  originNeighborhood String    @default("Centro")
+  originCompanyName  String    @default("Kimono Store - Artes Marciais")
+  originStreet       String    @default("Rua das Artes Marciais, 456")
+  originNeighborhood String    @default("Vila Olímpia")
   originCity         String    @default("São Paulo")
   originState        String    @default("SP")
-  originZipCode      String    @default("01234-567")
-  originPhone        String    @default("(11) 99999-9999")
-  originEmail        String    @default("contato@empresa.com")
-  originCnpj         String    @default("00.000.000/0001-00")
+  originZipCode      String    @default("04551-070")
+  originPhone        String    @default("(11) 98765-4321")
+  originEmail        String    @default("contato@kimonostore.com.br")
+  originCnpj         String    @default("12.345.678/0001-90")
   originStateReg     String    @default("000.000.000.000") // Inscrição Estadual
 
   @@index([category])

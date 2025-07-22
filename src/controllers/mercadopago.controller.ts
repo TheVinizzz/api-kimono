@@ -815,6 +815,7 @@ export const processCheckoutPix = async (req: Request, res: Response) => {
     }
 
     console.log('🛒 Processando PIX direto do checkout...');
+    console.log('📋 Dados recebidos:', JSON.stringify(req.body, null, 2));
     
     // Validar dados de entrada do checkout
     const checkoutData = req.body.orderData;
@@ -857,8 +858,12 @@ export const processCheckoutPix = async (req: Request, res: Response) => {
         customerName: (req.user as any).name || '',
         customerPhone: checkoutData.phone || '',
         customerDocument: cpfCnpj.replace(/\D/g, ''),
-        shippingAddress: checkoutData.address ? 
-          `${checkoutData.address.street}, ${checkoutData.address.number}${checkoutData.address.complement ? ', ' + checkoutData.address.complement : ''}, ${checkoutData.address.neighborhood}, ${checkoutData.address.city} - ${checkoutData.address.state}, ${checkoutData.address.zipCode}` : '',
+        shippingAddress: checkoutData.shippingMethod === 'LOCAL_PICKUP' ? 
+          'RETIRADA LOCAL' : 
+          (checkoutData.address ? 
+            `${checkoutData.address.street}, ${checkoutData.address.number}${checkoutData.address.complement ? ', ' + checkoutData.address.complement : ''}, ${checkoutData.address.neighborhood}, ${checkoutData.address.city} - ${checkoutData.address.state}, ${checkoutData.address.zipCode}` : ''),
+        shippingMethod: checkoutData.shippingMethod || 'STANDARD',
+        shippingCost: checkoutData.shippingCost || 0,
         items: {
           create: items.map((item: any) => ({
             productId: item.productId,
@@ -968,6 +973,7 @@ export const processCheckoutCard = async (req: Request, res: Response) => {
     }
 
     console.log('💳 Processando cartão direto do checkout...');
+    console.log('📋 Dados recebidos:', JSON.stringify(req.body, null, 2));
     
     // Validar dados de entrada do checkout
     const { orderData, cardData } = req.body;
@@ -1037,8 +1043,12 @@ export const processCheckoutCard = async (req: Request, res: Response) => {
         customerName: (req.user as any).name || address.name || '',
         customerPhone: address.phone || '',
         customerDocument: cpfCnpj.replace(/\D/g, ''),
-        shippingAddress: address ? 
-          `${address.street}, ${address.number}${address.complement ? ', ' + address.complement : ''}, ${address.neighborhood}, ${address.city} - ${address.state}, ${address.zipCode}` : '',
+        shippingAddress: orderData.shippingMethod === 'LOCAL_PICKUP' ? 
+          'RETIRADA LOCAL' : 
+          (address ? 
+            `${address.street}, ${address.number}${address.complement ? ', ' + address.complement : ''}, ${address.neighborhood}, ${address.city} - ${address.state}, ${address.zipCode}` : ''),
+        shippingMethod: orderData.shippingMethod || 'STANDARD',
+        shippingCost: orderData.shippingCost || 0,
         items: {
           create: items.map((item: any) => ({
             productId: item.productId,
@@ -1260,6 +1270,7 @@ export const processCheckoutBoleto = async (req: Request, res: Response) => {
     }
 
     console.log('🏦 Processando boleto direto do checkout...');
+    console.log('📋 Dados recebidos:', JSON.stringify(req.body, null, 2));
     
     // Validar dados de entrada do checkout
     const checkoutData = req.body.orderData;
@@ -1295,8 +1306,12 @@ export const processCheckoutBoleto = async (req: Request, res: Response) => {
         customerName: (req.user as any).name || '',
         customerPhone: checkoutData.phone || '',
         customerDocument: cpfCnpj.replace(/\D/g, ''),
-        shippingAddress: checkoutData.address ? 
-          `${checkoutData.address.street}, ${checkoutData.address.number}${checkoutData.address.complement ? ', ' + checkoutData.address.complement : ''}, ${checkoutData.address.neighborhood}, ${checkoutData.address.city} - ${checkoutData.address.state}, ${checkoutData.address.zipCode}` : '',
+        shippingAddress: checkoutData.shippingMethod === 'LOCAL_PICKUP' ? 
+          'RETIRADA LOCAL' : 
+          (checkoutData.address ? 
+            `${checkoutData.address.street}, ${checkoutData.address.number}${checkoutData.address.complement ? ', ' + checkoutData.address.complement : ''}, ${checkoutData.address.neighborhood}, ${checkoutData.address.city} - ${checkoutData.address.state}, ${checkoutData.address.zipCode}` : ''),
+        shippingMethod: checkoutData.shippingMethod || 'STANDARD',
+        shippingCost: checkoutData.shippingCost || 0,
         items: {
           create: items.map((item: any) => ({
             productId: item.productId,

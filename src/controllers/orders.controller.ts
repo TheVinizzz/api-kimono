@@ -54,17 +54,33 @@ const guestOrderCreateSchema = z.object({
   customerPhone: z.string().optional(),
   shippingAddress: z.object({
     name: z.string(),
-    street: z.string(),
-    number: z.string(),
+    street: z.string().optional(),
+    number: z.string().optional(),
     complement: z.string().optional(),
-    neighborhood: z.string(),
-    city: z.string(),
-    state: z.string(),
-    zipCode: z.string(),
+    neighborhood: z.string().optional(),
+    city: z.string().optional(),
+    state: z.string().optional(),
+    zipCode: z.string().optional(),
     cpfCnpj: z.string().optional()
   }),
   paymentMethod: z.enum(['PIX', 'BOLETO', 'CREDIT_CARD', 'DEBIT_CARD']),
+  shippingMethod: z.enum(['STANDARD', 'EXPRESS', 'LOCAL_PICKUP']).optional().default('STANDARD'),
+  shippingCost: z.number().min(0).optional().default(0),
   total: z.number().optional()
+}).refine((data) => {
+  // Se não for retirada local, endereço é obrigatório
+  if (data.shippingMethod !== 'LOCAL_PICKUP') {
+    return data.shippingAddress.street && 
+           data.shippingAddress.number && 
+           data.shippingAddress.neighborhood && 
+           data.shippingAddress.city && 
+           data.shippingAddress.state && 
+           data.shippingAddress.zipCode;
+  }
+  return true;
+}, {
+  message: "Endereço completo é obrigatório para entrega",
+  path: ["shippingAddress"]
 });
 
 // Obter todos os pedidos (admin)
@@ -898,14 +914,17 @@ export const getOrderTracking = async (req: Request, res: Response) => {
         break;
     }
     
+    // ✅ INFORMAÇÕES DIFERENTES PARA RETIRADA LOCAL
+    const isLocalPickup = order.shippingMethod === 'LOCAL_PICKUP';
+    
     return res.json({
       order,
       trackingInfo: {
-        trackingNumber: order.trackingNumber || 'Não disponível',
-        shippingCarrier: order.shippingCarrier || 'Não disponível',
-        estimatedDelivery: estimatedDeliveryText,
-        departureDate: order.departureDate ? new Date(order.departureDate).toLocaleDateString('pt-BR') : 'Não disponível',
-        currentLocation: order.currentLocation || 'Não disponível',
+        trackingNumber: isLocalPickup ? 'Retirada Local' : (order.trackingNumber || 'Não disponível'),
+        shippingCarrier: isLocalPickup ? 'Retirada na Loja' : (order.shippingCarrier || 'Não disponível'),
+        estimatedDelivery: isLocalPickup ? 'Disponível para retirada' : estimatedDeliveryText,
+        departureDate: isLocalPickup ? 'Não se aplica' : (order.departureDate ? new Date(order.departureDate).toLocaleDateString('pt-BR') : 'Não disponível'),
+        currentLocation: isLocalPickup ? 'Aguardando na loja' : (order.currentLocation || 'Não disponível'),
         status: order.status,
         progressPercentage,
       },
@@ -1094,7 +1113,7 @@ export const createGuestOrder = async (req: Request, res: Response) => {
       });
     }
     
-    const { items, customerEmail, customerName, customerPhone, shippingAddress, paymentMethod, total: sentTotal } = validation.data;
+    const { items, customerEmail, customerName, customerPhone, shippingAddress, paymentMethod, shippingMethod, shippingCost, total: sentTotal } = validation.data;
     
     // Verificar disponibilidade dos produtos
     const productIds = items.map(item => item.productId);
@@ -1154,7 +1173,11 @@ export const createGuestOrder = async (req: Request, res: Response) => {
           customerName,
           customerEmail,
           customerPhone,
-          shippingAddress: JSON.stringify(shippingAddress),
+          shippingAddress: shippingMethod === 'LOCAL_PICKUP' ? 
+            'RETIRADA LOCAL' : 
+            JSON.stringify(shippingAddress),
+          shippingMethod,
+          shippingCost,
           items: {
             create: items.map(item => ({
               productId: item.productId,

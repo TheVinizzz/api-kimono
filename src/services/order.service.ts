@@ -5,8 +5,8 @@ import emailService from './email.service';
 
 interface CreateOrderData {
   email: string;
-  cpfCnpj: string;
   total: number;
+  cpfCnpj: string;
   items: Array<{
     id?: number;
     productId?: number;
@@ -26,6 +26,8 @@ interface CreateOrderData {
   paymentId?: string;
   paymentMethod: string;
   paymentStatus: string;
+  shippingMethod?: string;
+  shippingCost?: number;
   userId?: number;
 }
 
@@ -69,6 +71,10 @@ class OrderService {
           
           // Endereço de entrega completo
           shippingAddress: `${orderData.address.street}, ${orderData.address.number}${orderData.address.complement ? ', ' + orderData.address.complement : ''}, ${orderData.address.neighborhood}, ${orderData.address.city} - ${orderData.address.state}, ${orderData.address.zipCode}`,
+          
+          // Método e custo de envio
+          shippingMethod: orderData.shippingMethod || 'STANDARD',
+          shippingCost: orderData.shippingCost || 0,
           
           // Items do pedido
           items: {
@@ -132,6 +138,10 @@ class OrderService {
           
           // Endereço de entrega completo
           shippingAddress: `${orderData.address.street}, ${orderData.address.number}${orderData.address.complement ? ', ' + orderData.address.complement : ''}, ${orderData.address.neighborhood}, ${orderData.address.city} - ${orderData.address.state}, ${orderData.address.zipCode}`,
+          
+          // Método e custo de envio
+          shippingMethod: orderData.shippingMethod || 'STANDARD',
+          shippingCost: orderData.shippingCost || 0,
           
           // Items do pedido
           items: {
@@ -375,6 +385,24 @@ class OrderService {
       
       if (!pedido) {
         throw new Error(`Pedido ${orderId} não encontrado`);
+      }
+
+      // ✅ VERIFICAR SE É RETIRADA LOCAL - NÃO GERAR CÓDIGO DE RASTREIO
+      if (pedido.shippingMethod === 'LOCAL_PICKUP') {
+        console.log(`🏪 Pedido ${orderId} é para retirada local - não gerando código de rastreio dos Correios`);
+        
+        // Atualizar pedido para status de processamento sem código de rastreio
+        await prisma.order.update({
+          where: { id: orderId },
+          data: {
+            status: 'PROCESSING',
+            trackingNumber: null,
+            shippingCarrier: null,
+            updatedAt: new Date()
+          }
+        });
+
+        return { trackingNumber: 'RETIRADA_LOCAL' };
       }
       
       // Verificar se o pedido já tem código de rastreio válido
