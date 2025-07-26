@@ -729,6 +729,13 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
           total: updatedOrder.total,
           paymentMethod: updatedOrder.paymentMethod || 'Não informado'
         });
+        
+        // ✅ ATUALIZAR USO DO CUPOM (quando admin marca como pago)
+        try {
+          await updateCouponUsage(updatedOrder.id);
+        } catch (couponError) {
+          console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${updatedOrder.id}:`, couponError);
+        }
       }
     } catch (error) {
       console.error('Erro ao enviar notificação WebSocket:', error);
@@ -818,6 +825,13 @@ export const adminUpdateOrderStatus = async (req: Request, res: Response) => {
           total: updatedOrder.total,
           paymentMethod: updatedOrder.paymentMethod || 'Não informado'
         });
+        
+        // ✅ ATUALIZAR USO DO CUPOM (quando admin marca como pago)
+        try {
+          await updateCouponUsage(updatedOrder.id);
+        } catch (couponError) {
+          console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${updatedOrder.id}:`, couponError);
+        }
       }
     } catch (error) {
       console.error('Erro ao enviar notificação WebSocket:', error);
@@ -1276,6 +1290,13 @@ export const checkGuestOrderPaymentStatus = async (req: Request, res: Response) 
             } catch (stockError) {
               console.error(`❌ Erro ao reduzir estoque do pedido guest ${order.id}:`, stockError);
             }
+            
+            // ✅ ATUALIZAR USO DO CUPOM
+            try {
+              await updateCouponUsage(order.id);
+            } catch (couponError) {
+              console.error(`❌ Erro ao atualizar uso do cupom para o pedido guest ${order.id}:`, couponError);
+            }
           }
           
           // Retornar dados atualizados
@@ -1584,5 +1605,56 @@ export const testReduceStock = async (req: Request, res: Response) => {
   }
 };
 
-// ✅ EXPORTAR FUNÇÃO PARA USO EM OUTROS MÓDULOS
-export { reduceStockOnPaymentApproved }; 
+// ✅ FUNÇÃO PARA ATUALIZAR USO DO CUPOM QUANDO PAGAMENTO É APROVADO
+const updateCouponUsage = async (orderId: number) => {
+  console.log(`🎫 Atualizando uso do cupom para pedido ${orderId}...`);
+  
+  try {
+    // Buscar pedido com cupom
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: { coupon: true }
+    });
+
+    if (!order) {
+      throw new Error(`Pedido ${orderId} não encontrado`);
+    }
+
+    if (!order.couponId || !order.coupon) {
+      console.log(`ℹ️ Pedido ${orderId} não possui cupom associado`);
+      return;
+    }
+
+    console.log(`🎫 Atualizando uso do cupom ${order.couponId} (${order.coupon.code}) para o pedido ${orderId}`);
+    
+    const updatedCoupon = await prisma.coupon.update({
+      where: { id: order.couponId },
+      data: {
+        usedCount: {
+          increment: 1
+        }
+      }
+    });
+    
+    console.log(`✅ Cupom ${order.couponId} atualizado. Usos: ${updatedCoupon.usedCount}/${updatedCoupon.maxUses || 'ilimitado'}`);
+    
+    // Verificar se o cupom atingiu o limite máximo
+    if (updatedCoupon.maxUses && updatedCoupon.usedCount >= updatedCoupon.maxUses) {
+      console.log(`⚠️ Cupom ${order.couponId} atingiu o limite máximo de usos (${updatedCoupon.maxUses})`);
+      
+      // Desativar o cupom automaticamente
+      await prisma.coupon.update({
+        where: { id: order.couponId },
+        data: { isActive: false }
+      });
+      
+      console.log(`🔒 Cupom ${order.couponId} desativado automaticamente`);
+    }
+  } catch (error) {
+    console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${orderId}:`, error);
+    throw error;
+  }
+};
+
+// ✅ EXPORTAR FUNÇÕES PARA USO EM OUTROS MÓDULOS
+export { reduceStockOnPaymentApproved, updateCouponUsage }; 

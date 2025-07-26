@@ -106,6 +106,9 @@ model Order {
   userId            Int?
   status            OrderStatus      @default(PENDING)
   total             Decimal          @db.Decimal(10, 2)
+  subtotal          Decimal?         @db.Decimal(10, 2) // Valor antes do desconto
+  discountAmount    Decimal?         @db.Decimal(10, 2) // Valor do desconto aplicado
+  couponId          Int?             // ID do cupom usado (se houver)
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
   trackingNumber    String?
@@ -126,6 +129,7 @@ model Order {
   labelPrinted      Boolean          @default(false) // Indica se a etiqueta de envio foi impressa
   labelPrintedAt    DateTime?        // Data/hora da impressão da etiqueta
   user              User?            @relation(fields: [userId], references: [id])
+  coupon            Coupon?          @relation(fields: [couponId], references: [id])
   items             OrderItem[]
   trackingUpdates   ShipmentUpdate[]
 
@@ -134,6 +138,7 @@ model Order {
   @@index([customerEmail])
   @@index([labelPrinted])
   @@index([shippingMethod])
+  @@index([couponId])
 }
 
 model OrderItem {
@@ -238,6 +243,31 @@ model InvoiceNumber {
   updatedAt     DateTime @updatedAt
 }
 
+// Sistema de Cupons de Desconto
+model Coupon {
+  id              Int        @id @default(autoincrement())
+  code            String     @unique // Código único do cupom
+  name            String     // Nome/descrição do cupom
+  description     String?    // Descrição detalhada
+  type            CouponType // Tipo de desconto (PERCENTAGE ou FIXED)
+  value           Decimal    @db.Decimal(10, 2) // Valor do desconto (percentual ou valor fixo)
+  minOrderValue   Decimal?   @db.Decimal(10, 2) // Valor mínimo do pedido para usar o cupom
+  maxDiscount     Decimal?   @db.Decimal(10, 2) // Desconto máximo (para cupons percentuais)
+  maxUses         Int?       // Número máximo de usos (null = ilimitado)
+  usedCount       Int        @default(0) // Número de vezes já usado
+  isActive        Boolean    @default(true) // Se o cupom está ativo
+  validFrom       DateTime   @default(now()) // Data de início da validade
+  validUntil      DateTime?  // Data de fim da validade (null = sem prazo)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  orders          Order[]    // Pedidos que usaram este cupom
+
+  @@index([code])
+  @@index([isActive])
+  @@index([validFrom])
+  @@index([validUntil])
+}
+
 enum UserRole {
   ADMIN
   CUSTOMER
@@ -252,4 +282,9 @@ enum OrderStatus {
   OUT_FOR_DELIVERY
   DELIVERED
   CANCELED
+}
+
+enum CouponType {
+  PERCENTAGE // Desconto percentual
+  FIXED      // Desconto em valor fixo
 }

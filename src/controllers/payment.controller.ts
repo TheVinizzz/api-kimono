@@ -7,7 +7,7 @@ import { validateDocument } from '../utils/validation';
 import { orderService } from '../services/order.service';
 import emailService from '../services/email.service';
 import { validateCPFForMercadoPago, formatPhoneForMercadoPago, generateExternalReference, processMercadoPagoError } from '../utils/mercadopago-errors';
-import { reduceStockOnPaymentApproved } from './orders.controller';
+import { reduceStockOnPaymentApproved, updateCouponUsage } from './orders.controller';
 
 // Schema para validação de pagamento com cartão de crédito
 const creditCardPaymentSchema = z.object({
@@ -710,6 +710,13 @@ export const checkPaymentStatus = async (req: Request, res: Response) => {
           } catch (stockError) {
             console.error(`❌ Erro ao reduzir estoque via verificação do pedido ${order.id}:`, stockError);
           }
+          
+          // ✅ ATUALIZAR USO DO CUPOM
+          try {
+            await updateCouponUsage(order.id);
+          } catch (couponError) {
+            console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${order.id}:`, couponError);
+          }
         }
       }
 
@@ -869,6 +876,13 @@ export const mercadoPagoWebhook = async (req: Request, res: Response) => {
           console.log(`📦 Estoque reduzido automaticamente via webhook (payment.controller) para o pedido ${orderId}`);
         } catch (stockError) {
           console.error(`❌ Erro ao reduzir estoque via webhook (payment.controller) do pedido ${orderId}:`, stockError);
+        }
+        
+        // ✅ ATUALIZAR USO DO CUPOM
+        try {
+          await updateCouponUsage(orderId);
+        } catch (couponError) {
+          console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${orderId}:`, couponError);
         }
       }
     } else {

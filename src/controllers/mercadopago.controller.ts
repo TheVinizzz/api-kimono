@@ -5,7 +5,7 @@ import prisma from '../config/prisma';
 import mercadoPagoService from '../services/mercadopago.service';
 import { OrderStatus } from '@prisma/client';
 import { validateDocument } from '../utils/validation';
-import { reduceStockOnPaymentApproved } from './orders.controller';
+import { reduceStockOnPaymentApproved, updateCouponUsage } from './orders.controller';
 
 // ===== CONTROLLER MERCADO PAGO PROFISSIONAL (2025) =====
 // Implementação com validações robustas e segurança aprimorada
@@ -523,6 +523,26 @@ export const checkPaymentStatus = async (req: Request, res: Response) => {
             updatedAt: new Date()
           }
         });
+
+        // ✅ PROCESSAR APROVAÇÃO DE PAGAMENTO (se mudou para PAID)
+        if (orderStatus === 'PAID' && order.status !== 'PAID') {
+          console.log('🎉 Pagamento aprovado via checkPaymentStatus - pedido:', order.id);
+          
+          // ✅ REDUZIR ESTOQUE AUTOMATICAMENTE
+          try {
+            await reduceStockOnPaymentApproved(order.id);
+            console.log(`📦 Estoque reduzido automaticamente via checkPaymentStatus para o pedido ${order.id}`);
+          } catch (stockError) {
+            console.error(`❌ Erro ao reduzir estoque via checkPaymentStatus do pedido ${order.id}:`, stockError);
+          }
+          
+          // ✅ ATUALIZAR USO DO CUPOM
+          try {
+            await updateCouponUsage(order.id);
+          } catch (couponError) {
+            console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${order.id}:`, couponError);
+          }
+        }
       }
 
       console.log('✅ Status consultado:', {
@@ -673,6 +693,13 @@ export const mercadoPagoWebhook = async (req: Request, res: Response) => {
             console.log(`📦 Estoque reduzido automaticamente via webhook para o pedido ${orderId}`);
           } catch (stockError) {
             console.error(`❌ Erro ao reduzir estoque via webhook do pedido ${orderId}:`, stockError);
+          }
+          
+          // ✅ ATUALIZAR USO DO CUPOM
+          try {
+            await updateCouponUsage(orderId);
+          } catch (couponError) {
+            console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${orderId}:`, couponError);
           }
           
           // TODO: Enviar email de confirmação
@@ -841,17 +868,27 @@ export const processCheckoutPix = async (req: Request, res: Response) => {
     const productsTotal = items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
     const orderTotal = checkoutData.total || productsTotal; // Usar total do frontend (inclui frete) ou calcular produtos
     
+    // Calcular subtotal (produtos + frete) e desconto
+    const subtotal = productsTotal + (checkoutData.shippingCost || 0);
+    const discountAmount = checkoutData.couponCode ? (subtotal - orderTotal) : 0;
+    
     console.log('💰 Calculando total do pedido:', {
       productsTotal,
       totalFromFrontend: checkoutData.total,
       finalTotal: orderTotal,
-      shippingCost: checkoutData.shippingCost
+      shippingCost: checkoutData.shippingCost,
+      subtotal,
+      discountAmount,
+      hasCoupon: !!checkoutData.couponCode
     });
 
     const order = await prisma.order.create({
       data: {
         userId: req.user.id,
-        total: orderTotal, // ✅ USAR TOTAL QUE INCLUI FRETE
+        total: orderTotal, // ✅ USAR TOTAL QUE INCLUI FRETE E DESCONTO
+        subtotal: subtotal, // ✅ VALOR ANTES DO DESCONTO
+        discountAmount: discountAmount > 0 ? discountAmount : null, // ✅ VALOR DO DESCONTO
+        couponId: checkoutData.couponId || null, // ✅ ID DO CUPOM (se aplicável)
         status: 'PENDING',
         paymentMethod: 'PIX',
         customerEmail: checkoutData.email,
@@ -887,6 +924,14 @@ export const processCheckoutPix = async (req: Request, res: Response) => {
     // ✅ 2️⃣ DEPOIS: PROCESSAR PIX
     const [firstName, ...lastNameParts] = (order.user?.name || '').split(' ');
     const lastName = lastNameParts.join(' ') || '';
+
+    console.log('💳 Enviando para Mercado Pago:', {
+      orderId: order.id,
+      transaction_amount: Number(order.total),
+      subtotal: order.subtotal,
+      discountAmount: order.discountAmount,
+      hasCoupon: !!order.couponId
+    });
 
     const payment = await mercadoPagoService.createPixPayment({
       transaction_amount: Number(order.total),
@@ -1033,10 +1078,26 @@ export const processCheckoutCard = async (req: Request, res: Response) => {
     const productsTotal = items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
     const orderTotal = orderData.total || productsTotal;
     
+    // Calcular subtotal (produtos + frete) e desconto
+    const subtotal = productsTotal + (orderData.shippingCost || 0);
+    const discountAmount = orderData.couponCode ? (subtotal - orderTotal) : 0;
+    
+    console.log('💰 Cálculo de valores (Cartão):', {
+      productsTotal,
+      shippingCost: orderData.shippingCost || 0,
+      subtotal,
+      discountAmount,
+      finalTotal: orderTotal,
+      hasCoupon: !!orderData.couponCode
+    });
+    
     const order = await prisma.order.create({
       data: {
         userId: req.user.id,
-        total: orderTotal,
+        total: orderTotal, // ✅ USAR TOTAL QUE INCLUI FRETE E DESCONTO
+        subtotal: subtotal, // ✅ VALOR ANTES DO DESCONTO
+        discountAmount: discountAmount > 0 ? discountAmount : null, // ✅ VALOR DO DESCONTO
+        couponId: orderData.couponId || null, // ✅ ID DO CUPOM (se aplicável)
         status: 'PENDING',
         paymentMethod: orderData.paymentMethod || 'CREDIT_CARD',
         customerEmail: orderData.email,
@@ -1096,6 +1157,14 @@ export const processCheckoutCard = async (req: Request, res: Response) => {
 
     const [firstName, ...lastNameParts] = (address.name || cardData.holderName).split(' ');
     const lastName = lastNameParts.join(' ') || '';
+
+    console.log('💳 Enviando para Mercado Pago (Cartão):', {
+      orderId: order.id,
+      transaction_amount: Number(order.total),
+      subtotal: order.subtotal,
+      discountAmount: order.discountAmount,
+      hasCoupon: !!order.couponId
+    });
 
     const payment = await mercadoPagoService.createPayment({
       transaction_amount: Number(order.total),
@@ -1164,6 +1233,13 @@ export const processCheckoutCard = async (req: Request, res: Response) => {
       } catch (stockError) {
         console.error(`❌ Erro ao reduzir estoque do pedido ${order.id}:`, stockError);
         // Não falhar o pagamento por causa do estoque
+      }
+
+      // ✅ ATUALIZAR USO DO CUPOM
+      try {
+        await updateCouponUsage(order.id);
+      } catch (couponError) {
+        console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${order.id}:`, couponError);
       }
 
       return res.status(201).json({
@@ -1296,10 +1372,26 @@ export const processCheckoutBoleto = async (req: Request, res: Response) => {
     const productsTotal = items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0);
     const orderTotal = checkoutData.total || productsTotal;
     
+    // Calcular subtotal (produtos + frete) e desconto
+    const subtotal = productsTotal + (checkoutData.shippingCost || 0);
+    const discountAmount = checkoutData.couponCode ? (subtotal - orderTotal) : 0;
+    
+    console.log('💰 Cálculo de valores (Boleto):', {
+      productsTotal,
+      shippingCost: checkoutData.shippingCost || 0,
+      subtotal,
+      discountAmount,
+      finalTotal: orderTotal,
+      hasCoupon: !!checkoutData.couponCode
+    });
+    
     const order = await prisma.order.create({
       data: {
         userId: req.user.id,
-        total: orderTotal,
+        total: orderTotal, // ✅ USAR TOTAL QUE INCLUI FRETE E DESCONTO
+        subtotal: subtotal, // ✅ VALOR ANTES DO DESCONTO
+        discountAmount: discountAmount > 0 ? discountAmount : null, // ✅ VALOR DO DESCONTO
+        couponId: checkoutData.couponId || null, // ✅ ID DO CUPOM (se aplicável)
         status: 'PENDING',
         paymentMethod: 'BOLETO',
         customerEmail: checkoutData.email,
@@ -1335,6 +1427,14 @@ export const processCheckoutBoleto = async (req: Request, res: Response) => {
     // ✅ 2️⃣ DEPOIS: PROCESSAR BOLETO
     const [firstName, ...lastNameParts] = (order.user?.name || '').split(' ');
     const lastName = lastNameParts.join(' ') || '';
+
+    console.log('💳 Enviando para Mercado Pago (Boleto):', {
+      orderId: order.id,
+      transaction_amount: Number(order.total),
+      subtotal: order.subtotal,
+      discountAmount: order.discountAmount,
+      hasCoupon: !!order.couponId
+    });
 
     const payment = await mercadoPagoService.createPayment({
       transaction_amount: Number(order.total),

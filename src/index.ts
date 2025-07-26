@@ -32,6 +32,7 @@ import analyticsRoutes from './routes/analytics.routes';
 import settingsRoutes from './routes/settings.routes';
 import productImagesRoutes from './routes/product-images.routes';
 import trackingRoutes from './routes/tracking.routes';
+import couponsRoutes from './routes/coupons.routes';
 
 // Inicializar o app
 const app = express();
@@ -143,6 +144,7 @@ app.use('/api/correios', correiosRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/invoices', invoiceRoutes);
 app.use('/api/thermal-invoices', thermalInvoiceRoutes);
+app.use('/api/coupons', couponsRoutes);
 
 // Health check da API
 app.get('/api/health', async (_req, res) => {
