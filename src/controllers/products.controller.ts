@@ -32,6 +32,7 @@ const productSchema = z.object({
 const productVariantSchema = z.object({
   size: z.string().min(1, 'Tamanho é obrigatório'),
   price: z.number().positive('Preço deve ser positivo'),
+  originalPrice: z.number().min(0, 'Preço original deve ser zero ou positivo').nullable().optional(),
   stock: z.number().int().nonnegative('Estoque não pode ser negativo'),
   sku: z.string().optional(),
   weight: z.number().positive('Peso deve ser positivo').min(0.1, 'Peso mínimo é 0.1kg').optional(),
@@ -50,7 +51,20 @@ const includeRelations = {
   },
   variants: {
     where: { isActive: true },
-    orderBy: { size: 'asc' as const }
+    orderBy: { size: 'asc' as const },
+    select: {
+      id: true,
+      productId: true,
+      size: true,
+      price: true,
+      originalPrice: true,
+      stock: true,
+      sku: true,
+      weight: true,
+      isActive: true,
+      createdAt: true,
+      updatedAt: true
+    }
   }
 };
 
@@ -525,7 +539,7 @@ export const createProductVariant = async (req: Request, res: Response) => {
       });
     }
 
-    const { size, price, stock, sku, isActive } = validation.data;
+    const { size, price, originalPrice, stock, sku, isActive } = validation.data;
 
     // Verificar se já existe uma variação com o mesmo tamanho
     const existingVariant = await prisma.productVariant.findUnique({
@@ -541,6 +555,7 @@ export const createProductVariant = async (req: Request, res: Response) => {
         productId: productIdNum,
         size,
         price,
+        originalPrice: originalPrice || null, // Usar originalPrice ou null se não fornecido
         stock,
         sku,
         isActive

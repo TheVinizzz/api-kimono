@@ -51,18 +51,19 @@ model ProductImage {
 }
 
 model ProductVariant {
-  id         Int     @id @default(autoincrement())
-  productId  Int
-  size       String  // P, M, G, GG, etc.
-  price      Decimal @db.Decimal(10, 2)
-  stock      Int     @default(0)
-  sku        String? // Código único da variação
-  weight     Float?  // Peso específico da variação em kg (opcional - usa peso do produto se não informado)
-  isActive   Boolean @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  orderItems OrderItem[]
+  id            Int      @id @default(autoincrement())
+  productId     Int
+  size          String   // P, M, G, GG, etc.
+  price         Decimal  @db.Decimal(10, 2)
+  originalPrice Decimal? @db.Decimal(10, 2) // Preço original para desconto
+  stock         Int      @default(0)
+  sku           String?  // Código único da variação
+  weight        Float?   // Peso específico da variação em kg (opcional - usa peso do produto se não informado)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems    OrderItem[]
 
   @@unique([productId, size]) // Garantir que não há tamanhos duplicados por produto
   @@index([productId])
