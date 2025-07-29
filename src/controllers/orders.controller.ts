@@ -20,13 +20,13 @@ const orderCreateSchema = z.object({
 
 // Schema de validação para atualização de status do pedido
 const orderUpdateSchema = z.object({
-  status: z.enum(['PENDING', 'PAID', 'SHIPPED', 'DELIVERED', 'CANCELED']),
+  status: z.enum(['PENDING', 'PAID', 'PROCESSING', 'SHIPPED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELED']),
 });
 
 // Schema para atualização administrativa de status (apenas status)
 const adminOrderUpdateSchema = z.object({
   orderId: z.number().int().positive(),
-  status: z.enum(['PENDING', 'PAID', 'SHIPPED', 'DELIVERED', 'CANCELED']),
+  status: z.enum(['PENDING', 'PAID', 'PROCESSING', 'SHIPPED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELED']),
 });
 
 // Schema for shipment update
