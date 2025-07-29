@@ -405,16 +405,44 @@ export const processPixPayment = async (req: Request, res: Response) => {
       notification_url: `${process.env.API_URL || 'http://localhost:4000'}/api/mercadopago/webhook`
     });
 
-    // ✅ ATUALIZAR PEDIDO
-    const updatedOrder = await prisma.order.update({
-      where: { id: orderId },
+    // ✅ 3️⃣ ATUALIZAR PEDIDO COM ID DO PAGAMENTO E STATUS CORRETO
+    const orderStatus = mercadoPagoService.mapMercadoPagoStatusToOrderStatus(payment.status);
+    await prisma.order.update({
+      where: { id: order.id },
       data: {
         paymentId: String(payment.id),
-        paymentMethod: 'PIX',
-        status: mercadoPagoService.mapMercadoPagoStatusToOrderStatus(payment.status) as OrderStatus,
+        status: orderStatus as OrderStatus,
         updatedAt: new Date()
       }
     });
+
+    console.log('✅ Pedido atualizado com status:', {
+      orderId: order.id,
+      paymentId: payment.id,
+      mpStatus: payment.status,
+      orderStatus
+    });
+
+    // ✅ SE PAGAMENTO FOI APROVADO IMEDIATAMENTE, REDUZIR ESTOQUE
+    if (orderStatus === 'PAID') {
+      console.log('🎉 Pagamento PIX aprovado imediatamente - reduzindo estoque:', order.id);
+      try {
+        await reduceStockOnPaymentApproved(order.id);
+        console.log(`📦 Estoque reduzido automaticamente para o pedido ${order.id}`);
+      } catch (stockError) {
+        console.error(`❌ Erro ao reduzir estoque do pedido ${order.id}:`, stockError);
+      }
+      
+      // ✅ ATUALIZAR USO DO CUPOM
+      if (order.couponId) {
+        try {
+          await updateCouponUsage(order.id);
+          console.log(`🎟️ Uso do cupom registrado para o pedido ${order.id}`);
+        } catch (couponError) {
+          console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${order.id}:`, couponError);
+        }
+      }
+    }
 
     // ✅ OBTER INFORMAÇÕES DO QR CODE
     const pixInfo = await mercadoPagoService.getPixInfo(String(payment.id));
@@ -430,7 +458,7 @@ export const processPixPayment = async (req: Request, res: Response) => {
       success: true,
       message: 'PIX gerado com sucesso',
       data: {
-        orderId: updatedOrder.id,
+        orderId: order.id,
         paymentId: payment.id,
         status: payment.status,
         orderStatus: mercadoPagoService.mapMercadoPagoStatusToOrderStatus(payment.status),
@@ -980,14 +1008,44 @@ export const processCheckoutPix = async (req: Request, res: Response) => {
       notification_url: `${process.env.API_URL || 'http://localhost:4000'}/api/mercadopago/webhook`
     });
 
-    // ✅ 3️⃣ ATUALIZAR PEDIDO COM ID DO PAGAMENTO
+    // ✅ 3️⃣ ATUALIZAR PEDIDO COM ID DO PAGAMENTO E STATUS CORRETO
+    const orderStatus = mercadoPagoService.mapMercadoPagoStatusToOrderStatus(payment.status);
     await prisma.order.update({
       where: { id: order.id },
       data: {
         paymentId: String(payment.id),
+        status: orderStatus as OrderStatus,
         updatedAt: new Date()
       }
     });
+
+    console.log('✅ Pedido atualizado com status:', {
+      orderId: order.id,
+      paymentId: payment.id,
+      mpStatus: payment.status,
+      orderStatus
+    });
+
+    // ✅ SE PAGAMENTO FOI APROVADO IMEDIATAMENTE, REDUZIR ESTOQUE
+    if (orderStatus === 'PAID') {
+      console.log('🎉 Pagamento PIX aprovado imediatamente - reduzindo estoque:', order.id);
+      try {
+        await reduceStockOnPaymentApproved(order.id);
+        console.log(`📦 Estoque reduzido automaticamente para o pedido ${order.id}`);
+      } catch (stockError) {
+        console.error(`❌ Erro ao reduzir estoque do pedido ${order.id}:`, stockError);
+      }
+      
+      // ✅ ATUALIZAR USO DO CUPOM
+      if (order.couponId) {
+        try {
+          await updateCouponUsage(order.id);
+          console.log(`🎟️ Uso do cupom registrado para o pedido ${order.id}`);
+        } catch (couponError) {
+          console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${order.id}:`, couponError);
+        }
+      }
+    }
 
     // ✅ VERIFICAR STATUS DO PIX (PIX normalmente inicia como 'pending')
     const isValidPix = payment.status === 'pending' || payment.status === 'approved';
@@ -1527,15 +1585,44 @@ export const processCheckoutBoleto = async (req: Request, res: Response) => {
       notification_url: `${process.env.API_URL || 'http://localhost:4000'}/api/mercadopago/webhook`
     });
 
-    // ✅ 3️⃣ ATUALIZAR PEDIDO COM ID DO PAGAMENTO
+    // ✅ 3️⃣ ATUALIZAR PEDIDO COM ID DO PAGAMENTO E STATUS CORRETO
+    const orderStatus = mercadoPagoService.mapMercadoPagoStatusToOrderStatus(payment.status);
     await prisma.order.update({
       where: { id: order.id },
       data: {
         paymentId: String(payment.id),
-        status: mercadoPagoService.mapMercadoPagoStatusToOrderStatus(payment.status) as OrderStatus,
+        status: orderStatus as OrderStatus,
         updatedAt: new Date()
       }
     });
+
+    console.log('✅ Pedido atualizado com status:', {
+      orderId: order.id,
+      paymentId: payment.id,
+      mpStatus: payment.status,
+      orderStatus
+    });
+
+    // ✅ SE PAGAMENTO FOI APROVADO IMEDIATAMENTE, REDUZIR ESTOQUE
+    if (orderStatus === 'PAID') {
+      console.log('🎉 Pagamento de boleto aprovado imediatamente - reduzindo estoque:', order.id);
+      try {
+        await reduceStockOnPaymentApproved(order.id);
+        console.log(`📦 Estoque reduzido automaticamente para o pedido ${order.id}`);
+      } catch (stockError) {
+        console.error(`❌ Erro ao reduzir estoque do pedido ${order.id}:`, stockError);
+      }
+      
+      // ✅ ATUALIZAR USO DO CUPOM
+      if (order.couponId) {
+        try {
+          await updateCouponUsage(order.id);
+          console.log(`🎟️ Uso do cupom registrado para o pedido ${order.id}`);
+        } catch (couponError) {
+          console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${order.id}:`, couponError);
+        }
+      }
+    }
 
     // ✅ VERIFICAR STATUS DO BOLETO (Boleto normalmente inicia como 'pending')
     const isValidBoleto = payment.status === 'pending' || payment.status === 'approved';
