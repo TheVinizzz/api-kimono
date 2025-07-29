@@ -1707,10 +1707,7 @@ export const processGuestBoletoPayment = async (req: Request, res: Response) => 
         address: {
           zip_code: orderData.address.zipCode,
           street_name: orderData.address.street,
-          street_number: orderData.address.number,
-          neighborhood: orderData.address.neighborhood,
-          city: orderData.address.city,
-          federal_unit: orderData.address.state
+          street_number: orderData.address.number
         }
       },
       date_of_expiration: dueDate.toISOString(),

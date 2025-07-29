@@ -39,6 +39,9 @@ export interface MercadoPagoPayer {
     street_name?: string;
     street_number?: string;
     zip_code?: string;
+    neighborhood?: string;
+    city?: string;
+    federal_unit?: string;
   };
 }
 
@@ -69,6 +72,27 @@ export interface MercadoPagoPayment {
   notification_url?: string;
   metadata?: {
     order_id?: string;
+  };
+  additional_info?: {
+    payer?: {
+      first_name?: string;
+      last_name?: string;
+      address?: {
+        zip_code?: string;
+        street_name?: string;
+        street_number?: string;
+        neighborhood?: string;
+        city?: string;
+        federal_unit?: string;
+      };
+    };
+    items?: Array<{
+      id?: string;
+      title?: string;
+      description?: string;
+      quantity?: number;
+      unit_price?: number;
+    }>;
   };
 }
 

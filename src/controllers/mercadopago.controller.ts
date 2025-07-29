@@ -1388,13 +1388,23 @@ export const processCheckoutBoleto = async (req: Request, res: Response) => {
       });
     }
 
-    const { items, cpfCnpj } = checkoutData;
+    const { items, cpfCnpj, address } = checkoutData;
 
     // ✅ VALIDAR CPF/CNPJ
     if (!validateDocument(cpfCnpj)) {
       return res.status(400).json({
         error: 'CPF/CNPJ inválido',
         code: 'INVALID_DOCUMENT'
+      });
+    }
+
+    // ✅ VALIDAR ENDEREÇO PARA BOLETO
+    if (!address || !address.street || !address.number || !address.zipCode || 
+        !address.neighborhood || !address.city || !address.state) {
+      return res.status(400).json({
+        error: 'Endereço incompleto para geração de boleto',
+        details: 'Endereço completo é obrigatório para pagamento com boleto',
+        code: 'INVALID_ADDRESS'
       });
     }
 
@@ -1455,8 +1465,22 @@ export const processCheckoutBoleto = async (req: Request, res: Response) => {
     console.log('✅ Pedido criado:', order.id);
 
     // ✅ 2️⃣ DEPOIS: PROCESSAR BOLETO
-    const [firstName, ...lastNameParts] = (order.user?.name || '').split(' ');
-    const lastName = lastNameParts.join(' ') || '';
+    const userName = order.user?.name || order.customerName || 'Cliente';
+    const [firstName, ...lastNameParts] = userName.split(' ');
+    const lastName = lastNameParts.join(' ') || 'Sobrenome'; // Garantir que sempre tenha um sobrenome
+
+    console.log('👤 Dados do pagador para boleto:', {
+      name: userName,
+      firstName,
+      lastName,
+      email: order.user?.email || '',
+      cpfCnpj: cpfCnpj,
+      address: address ? {
+        zipCode: address.zipCode,
+        street: address.street,
+        number: address.number
+      } : 'Sem endereço'
+    });
 
     console.log('💳 Enviando para Mercado Pago (Boleto):', {
       orderId: order.id,
@@ -1478,6 +1502,26 @@ export const processCheckoutBoleto = async (req: Request, res: Response) => {
           type: cpfCnpj.length === 11 ? 'CPF' : 'CNPJ',
           number: cpfCnpj.replace(/\D/g, '')
         },
+        // Adicionar endereço completo para boleto
+        address: {
+          zip_code: address.zipCode.replace(/\D/g, ''),
+          street_name: address.street,
+          street_number: address.number,
+          neighborhood: address.neighborhood,
+          city: address.city,
+          federal_unit: address.state
+        }
+      },
+      additional_info: {
+        payer: {
+          first_name: firstName,
+          last_name: lastName,
+          address: {
+            zip_code: address.zipCode.replace(/\D/g, ''),
+            street_name: address.street,
+            street_number: address.number
+          }
+        }
       },
       external_reference: String(order.id),
       notification_url: `${process.env.API_URL || 'http://localhost:4000'}/api/mercadopago/webhook`
@@ -1508,7 +1552,10 @@ export const processCheckoutBoleto = async (req: Request, res: Response) => {
         message: 'Boleto gerado com sucesso',
         orderId: order.id,
         paymentId: payment.id,
-        status: payment.status
+        status: payment.status,
+        boleto_url: payment.transaction_details?.external_resource_url || null,
+        transaction_details: payment.transaction_details || null,
+        payment_method_id: payment.payment_method_id
       });
     } else {
       // ❌ BOLETO REJEITADO
