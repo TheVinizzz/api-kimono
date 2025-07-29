@@ -4,6 +4,7 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 export const getAnalytics = async (req: Request, res: Response) => {
+  
   try {
     // Obter período dos parâmetros de consulta (padrão: última semana)
     const startDate = req.query.startDate 
