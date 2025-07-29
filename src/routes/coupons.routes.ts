@@ -4,7 +4,7 @@ import {
   getCouponById,
   createCoupon,
   updateCoupon,
-  deleteCoupon,
+  deactivateCoupon,
   validateCoupon,
   applyCouponToOrder,
   removeCouponFromOrder
@@ -31,6 +31,6 @@ router.get('/', getAllCoupons);
 router.get('/:id', getCouponById);
 router.post('/', createCoupon);
 router.put('/:id', updateCoupon);
-router.delete('/:id', deleteCoupon);
+router.delete('/:id', deactivateCoupon);
 
 export default router; 

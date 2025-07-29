@@ -6,6 +6,7 @@ import mercadoPagoService from '../services/mercadopago.service';
 import { OrderStatus } from '@prisma/client';
 import { validateDocument } from '../utils/validation';
 import { reduceStockOnPaymentApproved, updateCouponUsage } from './orders.controller';
+import config from '../config';
 
 // ===== CONTROLLER MERCADO PAGO PROFISSIONAL (2025) =====
 // Implementação com validações robustas e segurança aprimorada
@@ -823,6 +824,35 @@ export const getPixQrCode = async (req: Request, res: Response) => {
 
   } catch (error: any) {
     console.error('❌ Erro ao buscar QR Code PIX:', error);
+    
+    return res.status(500).json({
+      error: 'Erro interno do servidor',
+      code: 'INTERNAL_SERVER_ERROR'
+    });
+  }
+};
+
+// ✅ ENDPOINT PÚBLICO: OBTER CONFIGURAÇÕES DO MERCADO PAGO PARA O FRONTEND
+export const getMercadoPagoConfig = async (req: Request, res: Response) => {
+  try {
+    console.log('🔧 Fornecendo configurações públicas do Mercado Pago...');
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Configurações do Mercado Pago obtidas com sucesso',
+      data: {
+        publicKey: config.mercadopago.publicKey,
+        environment: config.mercadopago.environment,
+        currency: config.mercadopago.defaultCurrency,
+        country: config.mercadopago.defaultCountry,
+        maxInstallments: config.mercadopago.maxInstallments,
+        pixExpirationMinutes: config.mercadopago.pixExpirationMinutes,
+        boletoExpirationDays: config.mercadopago.boletoExpirationDays
+      }
+    });
+
+  } catch (error: any) {
+    console.error('❌ Erro ao obter configurações do Mercado Pago:', error);
     
     return res.status(500).json({
       error: 'Erro interno do servidor',

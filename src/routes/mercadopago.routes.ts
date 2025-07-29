@@ -16,10 +16,14 @@ import {
   testUserCardData,
   testStockReduction,
   testOrderData,
-  testRealCheckout
+  testRealCheckout,
+  getMercadoPagoConfig
 } from '../controllers/mercadopago.controller';
 
 const router = Router();
+
+// ✅ ROTA PÚBLICA: Configurações do Mercado Pago para o frontend
+router.get('/config', getMercadoPagoConfig);
 
 // Rotas protegidas (requer autenticação)
 router.post('/credit-card', auth, processCreditCardPayment);

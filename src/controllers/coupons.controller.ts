@@ -59,10 +59,18 @@ const validateCouponSchema = z.object({
   orderValue: z.number().positive('Valor do pedido deve ser positivo'),
 });
 
-// Obter todos os cupons
+// Obter todos os cupons (excluindo desativados)
 export const getAllCoupons = async (_req: Request, res: Response) => {
   try {
     const coupons = await prisma.coupon.findMany({
+      where: {
+        // Filtrar cupons que não foram desativados (não começam com DISABLED_)
+        NOT: {
+          code: {
+            startsWith: 'DISABLED_'
+          }
+        }
+      },
       orderBy: { createdAt: 'desc' }
     });
     
@@ -185,8 +193,8 @@ export const updateCoupon = async (req: Request, res: Response) => {
   }
 };
 
-// Deletar cupom
-export const deleteCoupon = async (req: Request, res: Response) => {
+// Desativar cupom (soft delete)
+export const deactivateCoupon = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const couponId = Number(id);
@@ -204,25 +212,42 @@ export const deleteCoupon = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Cupom não encontrado' });
     }
     
-    // Verificar se há pedidos usando este cupom
-    const ordersWithCoupon = await prisma.order.findFirst({
-      where: { couponId }
-    });
-    
-    if (ordersWithCoupon) {
+    // Verificar se o cupom já está desativado
+    if (!coupon.isActive) {
       return res.status(400).json({ 
-        error: 'Não é possível deletar o cupom pois existem pedidos associados' 
+        error: 'Cupom já está desativado' 
       });
     }
     
-    await prisma.coupon.delete({
-      where: { id: couponId }
+    // Gerar novo código único para evitar conflitos futuros
+    const timestamp = Date.now();
+    const randomSuffix = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const newCode = `DISABLED_${timestamp}_${randomSuffix}`;
+    
+    // Desativar cupom e alterar código
+    const updatedCoupon = await prisma.coupon.update({
+      where: { id: couponId },
+      data: {
+        isActive: false,
+        code: newCode,
+        updatedAt: new Date()
+      }
     });
     
-    return res.json({ message: 'Cupom deletado com sucesso' });
+    console.log(`✅ Cupom ${coupon.code} desativado com sucesso. Novo código: ${newCode}`);
+    
+    return res.json({ 
+      message: 'Cupom desativado com sucesso',
+      data: {
+        id: updatedCoupon.id,
+        originalCode: coupon.code,
+        newCode: updatedCoupon.code,
+        isActive: updatedCoupon.isActive
+      }
+    });
   } catch (error) {
-    console.error('Erro ao deletar cupom:', error);
-    return res.status(500).json({ error: 'Erro ao deletar cupom' });
+    console.error('Erro ao desativar cupom:', error);
+    return res.status(500).json({ error: 'Erro ao desativar cupom' });
   }
 };
 
