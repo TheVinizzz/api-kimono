@@ -204,8 +204,23 @@ export const getFilteredProducts = async (req: Request, res: Response) => {
       });
     }
 
+    // Calcular stock total baseado nas variantes para cada produto
+    const productsWithCalculatedStock = filteredProducts.map(product => {
+      let calculatedStock = product.stock;
+      if (product.variants && product.variants.length > 0) {
+        calculatedStock = product.variants
+          .filter(variant => variant.isActive)
+          .reduce((total, variant) => total + (variant.stock || 0), 0);
+      }
+      
+      return {
+        ...product,
+        stock: calculatedStock
+      };
+    });
+
     // Serializar BigInt antes de enviar resposta
-    const serializedProducts = serializeBigInt(filteredProducts);
+    const serializedProducts = serializeBigInt(productsWithCalculatedStock);
     return res.json(serializedProducts);
   } catch (error) {
     console.error('Erro ao filtrar produtos:', error);
@@ -220,8 +235,23 @@ export const getAllProducts = async (_req: Request, res: Response) => {
       include: includeRelations,
     });
     
+    // Calcular stock total baseado nas variantes para cada produto
+    const productsWithCalculatedStock = products.map(product => {
+      let calculatedStock = product.stock;
+      if (product.variants && product.variants.length > 0) {
+        calculatedStock = product.variants
+          .filter(variant => variant.isActive)
+          .reduce((total, variant) => total + (variant.stock || 0), 0);
+      }
+      
+      return {
+        ...product,
+        stock: calculatedStock
+      };
+    });
+    
     // Serializar BigInt antes de enviar resposta
-    const serializedProducts = serializeBigInt(products);
+    const serializedProducts = serializeBigInt(productsWithCalculatedStock);
     return res.json(serializedProducts);
   } catch (error) {
     console.error('Erro ao buscar produtos:', error);
@@ -248,8 +278,22 @@ export const getProductById = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Produto não encontrado' });
     }
     
+    // Calcular stock total baseado nas variantes se o produto tiver variantes
+    let calculatedStock = product.stock;
+    if (product.variants && product.variants.length > 0) {
+      calculatedStock = product.variants
+        .filter(variant => variant.isActive)
+        .reduce((total, variant) => total + (variant.stock || 0), 0);
+    }
+    
+    // Criar objeto com stock calculado
+    const productWithCalculatedStock = {
+      ...product,
+      stock: calculatedStock
+    };
+    
     // Serializar BigInt antes de enviar resposta
-    const serializedProduct = serializeBigInt(product);
+    const serializedProduct = serializeBigInt(productWithCalculatedStock);
     return res.json(serializedProduct);
   } catch (error) {
     console.error('Erro ao buscar produto:', error);
