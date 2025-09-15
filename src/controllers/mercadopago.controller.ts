@@ -960,11 +960,17 @@ export const processCheckoutPix = async (req: Request, res: Response) => {
         shippingMethod: checkoutData.shippingMethod || 'STANDARD',
         shippingCost: checkoutData.shippingCost || 0,
         items: {
-          create: items.map((item: any) => ({
-            productId: item.productId,
-            quantity: item.quantity,
-            price: item.price
-          }))
+          create: items.map((item: any) => {
+            const itemData = {
+              productId: item.productId,
+              quantity: item.quantity,
+              price: item.price,
+              productVariantId: item.productVariantId || null,
+              size: item.size || null
+            };
+            console.log('🔍 DEBUG MERCADOPAGO - Criando item:', JSON.stringify(itemData, null, 2));
+            return itemData;
+          })
         }
       },
       include: { 
@@ -1199,11 +1205,17 @@ export const processCheckoutCard = async (req: Request, res: Response) => {
         shippingMethod: orderData.shippingMethod || 'STANDARD',
         shippingCost: orderData.shippingCost || 0,
         items: {
-          create: items.map((item: any) => ({
-            productId: item.productId,
-            quantity: item.quantity,
-            price: item.price
-          }))
+          create: items.map((item: any) => {
+            const itemData = {
+              productId: item.productId,
+              quantity: item.quantity,
+              price: item.price,
+              productVariantId: item.productVariantId || null,
+              size: item.size || null
+            };
+            console.log('🔍 DEBUG MERCADOPAGO - Criando item:', JSON.stringify(itemData, null, 2));
+            return itemData;
+          })
         }
       },
       include: { 
@@ -1447,6 +1459,7 @@ export const processCheckoutBoleto = async (req: Request, res: Response) => {
     }
 
     const { items, cpfCnpj, address } = checkoutData;
+    console.log('🔍 DEBUG MERCADOPAGO - Itens recebidos:', JSON.stringify(items, null, 2));
 
     // ✅ VALIDAR CPF/CNPJ
     if (!validateDocument(cpfCnpj)) {
@@ -1503,11 +1516,17 @@ export const processCheckoutBoleto = async (req: Request, res: Response) => {
         shippingMethod: checkoutData.shippingMethod || 'STANDARD',
         shippingCost: checkoutData.shippingCost || 0,
         items: {
-          create: items.map((item: any) => ({
-            productId: item.productId,
-            quantity: item.quantity,
-            price: item.price
-          }))
+          create: items.map((item: any) => {
+            const itemData = {
+              productId: item.productId,
+              quantity: item.quantity,
+              price: item.price,
+              productVariantId: item.productVariantId || null,
+              size: item.size || null
+            };
+            console.log('🔍 DEBUG MERCADOPAGO - Criando item:', JSON.stringify(itemData, null, 2));
+            return itemData;
+          })
         }
       },
       include: { 

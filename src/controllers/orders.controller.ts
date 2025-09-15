@@ -11,6 +11,8 @@ const orderItemSchema = z.object({
   productId: z.number().int().positive(),
   quantity: z.number().int().positive(),
   price: z.number().positive(),
+  productVariantId: z.number().int().positive().optional(),
+  size: z.string().optional(),
 });
 
 // Schema de validação para criação de pedido
@@ -95,7 +97,26 @@ export const getAllOrders = async (_req: Request, res: Response) => {
             email: true,
           },
         },
-        items: true,
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+                imageUrl: true,
+                description: true,
+              },
+            },
+            productVariant: {
+              select: {
+                id: true,
+                size: true,
+                sku: true,
+                price: true,
+              },
+            },
+          },
+        },
       },
       orderBy: {
         createdAt: 'desc',
@@ -121,7 +142,26 @@ export const getUserOrders = async (req: Request, res: Response) => {
     const orders = await prisma.order.findMany({
       where: { userId },
       include: {
-        items: true,
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+                imageUrl: true,
+                description: true,
+              },
+            },
+            productVariant: {
+              select: {
+                id: true,
+                size: true,
+                sku: true,
+                price: true,
+              },
+            },
+          },
+        },
       },
       orderBy: {
         createdAt: 'desc',
@@ -159,7 +199,26 @@ export const getOrderById = async (req: Request, res: Response) => {
             email: true,
           },
         },
-        items: true,
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+                imageUrl: true,
+                description: true,
+              },
+            },
+            productVariant: {
+              select: {
+                id: true,
+                size: true,
+                sku: true,
+                price: true,
+              },
+            },
+          },
+        },
       },
     });
     
@@ -188,9 +247,12 @@ export const createOrder = async (req: Request, res: Response) => {
     
     const userId = req.user.id;
     
+    console.log('🔍 DEBUG BACKEND - Dados recebidos:', JSON.stringify(req.body, null, 2));
+    
     const validation = orderCreateSchema.safeParse(req.body);
     
     if (!validation.success) {
+      console.log('❌ DEBUG BACKEND - Validação falhou:', validation.error.format());
       return res.status(400).json({ 
         error: 'Dados inválidos', 
         details: validation.error.format() 
@@ -198,6 +260,7 @@ export const createOrder = async (req: Request, res: Response) => {
     }
     
     const { items } = validation.data;
+    console.log('✅ DEBUG BACKEND - Itens validados:', JSON.stringify(items, null, 2));
     
     // Verificar disponibilidade dos produtos
     const productIds = items.map(item => item.productId);
@@ -251,16 +314,41 @@ export const createOrder = async (req: Request, res: Response) => {
           userId,
           total,
           status: 'PENDING',
-          items: {
-            create: items.map(item => ({
+        items: {
+          create: items.map(item => {
+            const itemData = {
               productId: item.productId,
               quantity: item.quantity,
               price: item.price,
-            })),
-          },
+              productVariantId: item.productVariantId || null,
+              size: item.size || null,
+            };
+            console.log('🔍 DEBUG BACKEND - Criando item:', JSON.stringify(itemData, null, 2));
+            return itemData;
+          }),
+        },
         },
         include: {
-          items: true,
+          items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+                imageUrl: true,
+                description: true,
+              },
+            },
+            productVariant: {
+              select: {
+                id: true,
+                size: true,
+                sku: true,
+                price: true,
+              },
+            },
+          },
+        },
         },
       });
       
@@ -704,7 +792,26 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
       where: { id: orderId },
       data: { status },
       include: {
-        items: true,
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+                imageUrl: true,
+                description: true,
+              },
+            },
+            productVariant: {
+              select: {
+                id: true,
+                size: true,
+                sku: true,
+                price: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -729,6 +836,14 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
           total: updatedOrder.total,
           paymentMethod: updatedOrder.paymentMethod || 'Não informado'
         });
+        
+        // ✅ REDUZIR ESTOQUE QUANDO PEDIDO É MARCADO COMO PAID
+        try {
+          await reduceStockOnPaymentApproved(updatedOrder.id);
+          console.log(`📦 Estoque reduzido automaticamente para pedido ${updatedOrder.id}`);
+        } catch (stockError) {
+          console.error(`❌ Erro ao reduzir estoque do pedido ${updatedOrder.id}:`, stockError);
+        }
         
         // ✅ ATUALIZAR USO DO CUPOM (quando admin marca como pago)
         try {
@@ -800,7 +915,26 @@ export const adminUpdateOrderStatus = async (req: Request, res: Response) => {
             email: true,
           },
         },
-        items: true,
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+                imageUrl: true,
+                description: true,
+              },
+            },
+            productVariant: {
+              select: {
+                id: true,
+                size: true,
+                sku: true,
+                price: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -876,6 +1010,15 @@ export const getOrderTracking = async (req: Request, res: Response) => {
                 id: true,
                 name: true,
                 imageUrl: true,
+                description: true,
+              },
+            },
+            productVariant: {
+              select: {
+                id: true,
+                size: true,
+                sku: true,
+                price: true,
               },
             },
           },
@@ -1118,9 +1261,12 @@ export const getGuestOrderById = async (req: Request, res: Response) => {
 // Criar pedido para usuário não autenticado (guest)
 export const createGuestOrder = async (req: Request, res: Response) => {
   try {
+    console.log('🔍 DEBUG BACKEND GUEST - Dados recebidos:', JSON.stringify(req.body, null, 2));
+    
     const validation = guestOrderCreateSchema.safeParse(req.body);
     
     if (!validation.success) {
+      console.log('❌ DEBUG BACKEND GUEST - Validação falhou:', validation.error.format());
       return res.status(400).json({ 
         error: 'Dados inválidos', 
         details: validation.error.format() 
@@ -1128,6 +1274,7 @@ export const createGuestOrder = async (req: Request, res: Response) => {
     }
     
     const { items, customerEmail, customerName, customerPhone, shippingAddress, paymentMethod, shippingMethod, shippingCost, total: sentTotal } = validation.data;
+    console.log('✅ DEBUG BACKEND GUEST - Itens validados:', JSON.stringify(items, null, 2));
     
     // Verificar disponibilidade dos produtos
     const productIds = items.map(item => item.productId);
@@ -1193,11 +1340,17 @@ export const createGuestOrder = async (req: Request, res: Response) => {
           shippingMethod,
           shippingCost,
           items: {
-            create: items.map(item => ({
-              productId: item.productId,
-              quantity: item.quantity,
-              price: item.price
-            }))
+            create: items.map(item => {
+              const itemData = {
+                productId: item.productId,
+                quantity: item.quantity,
+                price: item.price,
+                productVariantId: item.productVariantId || null,
+                size: item.size || null,
+              };
+              console.log('🔍 DEBUG BACKEND GUEST - Criando item:', JSON.stringify(itemData, null, 2));
+              return itemData;
+            })
           }
         },
         include: {
