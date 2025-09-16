@@ -57,61 +57,47 @@ interface InvoiceData {
 // Buscar dados da empresa das configurações
 async function getCompanyInfo(): Promise<CompanyInfo> {
   try {
-    // Buscar configurações específicas usando key/value
-    const settingsMap = new Map();
-    const settings = await prisma.appSettings.findMany({
+    // Usar a mesma função que as etiquetas usam para garantir consistência
+    const { getOriginInfo } = await import('./settings.controller');
+    const originInfo = await getOriginInfo();
+    
+    // Buscar dados adicionais de CNPJ e email das configurações
+    const additionalSettings = await prisma.appSettings.findMany({
       where: {
-        category: 'company'
+        key: {
+          in: ['shipping_origin_cnpj', 'shipping_origin_email']
+        }
       }
     });
     
-    settings.forEach(setting => {
-      settingsMap.set(setting.key, setting.value);
-    });
+    const settingsMap = Object.fromEntries(additionalSettings.map(s => [s.key, s.value]));
     
-    // Se encontrou configurações, usar elas
-    if (settingsMap.size > 0) {
-      return {
-        name: settingsMap.get('name') || 'Kimono Store',
-        address: settingsMap.get('address') || 'Rua das Artes Marciais, 123',
-        neighborhood: settingsMap.get('neighborhood') || 'Centro',
-        city: settingsMap.get('city') || 'São Paulo',
-        state: settingsMap.get('state') || 'SP',
-        zipCode: settingsMap.get('zipCode') || '01234-567',
-        phone: settingsMap.get('phone') || '(11) 99999-9999',
-        email: settingsMap.get('email') || 'contato@kimonostore.com',
-        cnpj: settingsMap.get('cnpj') || '00.000.000/0001-00',
-        stateReg: settingsMap.get('stateReg') || '000.000.000.000'
-      };
-    }
-    
-    // Dados padrão se não configurado
     return {
-      name: 'Kimono Store',
-      address: 'Rua das Artes Marciais, 123',
-      neighborhood: 'Centro',
-      city: 'São Paulo',
-      state: 'SP',
-      zipCode: '01234-567',
-      phone: '(11) 99999-9999',
-      email: 'contato@kimonostore.com',
-      cnpj: '00.000.000/0001-00',
-      stateReg: '000.000.000.000'
+      name: originInfo.name || 'Kimono Store',
+      address: originInfo.address || 'Rua das Flores, 123',
+      neighborhood: originInfo.neighborhood || 'Centro',
+      city: originInfo.city || 'São Paulo',
+      state: originInfo.state || 'SP',
+      zipCode: originInfo.zipCode || '01310-100',
+      phone: originInfo.phone || '(11) 99999-9999',
+      email: settingsMap['shipping_origin_email'] || 'contato@kimonostore.com',
+      cnpj: settingsMap['shipping_origin_cnpj'] || '00.000.000/0001-00',
+      stateReg: '' // Removido - não exibir Inscrição Estadual
     };
   } catch (error) {
     console.error('Erro ao buscar dados da empresa:', error);
     // Retorna dados padrão em caso de erro
     return {
       name: 'Kimono Store',
-      address: 'Rua das Artes Marciais, 123',
+      address: 'Rua das Flores, 123',
       neighborhood: 'Centro',
       city: 'São Paulo',
       state: 'SP',
-      zipCode: '01234-567',
+      zipCode: '01310-100',
       phone: '(11) 99999-9999',
       email: 'contato@kimonostore.com',
       cnpj: '00.000.000/0001-00',
-      stateReg: '000.000.000.000'
+      stateReg: '' // Removido - não exibir Inscrição Estadual
     };
   }
 }
@@ -336,7 +322,6 @@ async function generateInvoicePDF(data: InvoiceData): Promise<Buffer> {
       doc.text(`Razão Social: ${data.company.name}`, 40, yPos);
       yPos += 12;
       doc.text(`CNPJ: ${data.company.cnpj}`, 40, yPos);
-      doc.text(`Inscrição Estadual: ${data.company.stateReg}`, 250, yPos);
       yPos += 12;
       doc.text(`Endereço: ${data.company.address}`, 40, yPos);
       yPos += 12;

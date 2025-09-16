@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as adminController from '../controllers/admin.controller';
+import * as authController from '../controllers/auth.controller';
 import { auth, isAdmin } from '../middleware/auth';
 
 const router = Router();
@@ -12,5 +13,6 @@ router.get('/dashboard', adminController.getDashboardStats);
 
 // Usuários
 router.get('/users', adminController.getAllUsers);
+router.post('/users/:userId/reset-password', authController.adminResetPassword);
 
 export default router; 

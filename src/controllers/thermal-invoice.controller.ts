@@ -13,46 +13,41 @@ interface ThermalPrinterConfig {
 // Obter dados da empresa (compatível com ThermalInvoiceData)
 async function getCompanyInfo(): Promise<ThermalInvoiceData['company']> {
   try {
-    const settings = await prisma.appSettings.findMany({
+    // Usar a mesma função que as etiquetas 58mm usam para garantir consistência
+    const { getOriginInfo } = await import('./settings.controller');
+    const originInfo = await getOriginInfo();
+    
+    // Buscar dados adicionais de CNPJ e email das configurações
+    const additionalSettings = await prisma.appSettings.findMany({
       where: {
         key: {
-          in: [
-            'shipping_origin_name',
-            'shipping_origin_address',
-            'shipping_origin_neighborhood',
-            'shipping_origin_city',
-            'shipping_origin_state',
-            'shipping_origin_zipcode',
-            'shipping_origin_phone',
-            'shipping_origin_cnpj',
-            'shipping_origin_email'
-          ]
+          in: ['shipping_origin_cnpj', 'shipping_origin_email']
         }
       }
     });
-    const map = Object.fromEntries(settings.map(s => [s.key, s.value]));
+    
+    const settingsMap = Object.fromEntries(additionalSettings.map(s => [s.key, s.value]));
+    
     return {
-      name: map['shipping_origin_name'] || 'Sua Empresa Ltda',
-      address: map['shipping_origin_address']
-        ? `${map['shipping_origin_address']}${map['shipping_origin_neighborhood'] ? ', ' + map['shipping_origin_neighborhood'] : ''}`
-        : 'Rua Exemplo, 123',
-      city: map['shipping_origin_city'] || 'São Paulo',
-      state: map['shipping_origin_state'] || 'SP',
-      zipCode: map['shipping_origin_zipcode'] || '01000-000',
-      phone: map['shipping_origin_phone'] || '(11) 1234-5678',
-      email: map['shipping_origin_email'] || 'contato@empresa.com.br',
-      cnpj: map['shipping_origin_cnpj'] || '00.000.000/0001-00'
+      name: originInfo.name || 'Kimono Store',
+      address: originInfo.address || 'Rua das Flores, 123',
+      city: originInfo.city || 'São Paulo',
+      state: originInfo.state || 'SP',
+      zipCode: originInfo.zipCode || '01310-100',
+      phone: originInfo.phone || '(11) 99999-9999',
+      email: settingsMap['shipping_origin_email'] || 'contato@kimonostore.com',
+      cnpj: settingsMap['shipping_origin_cnpj'] || '00.000.000/0001-00'
     };
   } catch (error) {
     console.error('Erro ao obter dados da empresa:', error);
     return {
-      name: 'Sua Empresa Ltda',
-      address: 'Rua Exemplo, 123, Centro',
+      name: 'Kimono Store',
+      address: 'Rua das Flores, 123',
       city: 'São Paulo',
       state: 'SP',
-      zipCode: '01000-000',
-      phone: '(11) 1234-5678',
-      email: 'contato@empresa.com.br',
+      zipCode: '01310-100',
+      phone: '(11) 99999-9999',
+      email: 'contato@kimonostore.com',
       cnpj: '00.000.000/0001-00'
     };
   }
