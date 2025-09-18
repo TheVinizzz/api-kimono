@@ -54,6 +54,7 @@ export const getPendingShippingLabels = async (req: Request, res: Response) => {
         AND: [
           {
             OR: [
+              { status: 'PAID' },        // ✅ INCLUIR pedidos pagos
               { status: 'PROCESSING' },
               { status: 'SHIPPED' },
               { status: 'IN_TRANSIT' },
