@@ -1,16 +1,24 @@
-# Multi-stage build para otimizar o tamanho da imagem
-FROM node:18-alpine AS builder
+# Dockerfile otimizado para produção
+FROM node:20-alpine
+
+# Instalar dependências necessárias
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    dumb-init
+
+# Criar usuário não-root para segurança
+RUN addgroup -g 1001 -S nodejs
+RUN adduser -S nextjs -u 1001
 
 WORKDIR /app
-
-# Instalar dependências do sistema necessárias para build
-RUN apk add --no-cache python3 make g++
 
 # Copiar arquivos de configuração
 COPY package*.json tsconfig.json ./
 
-# Instalar todas as dependências (incluindo devDependencies)
-RUN npm ci --silent
+# Instalar dependências de produção
+RUN npm ci --only=production && npm cache clean --force
 
 # Copiar código fonte
 COPY . .
@@ -21,60 +29,12 @@ RUN npx prisma generate
 # Compilar TypeScript
 RUN npm run build
 
-# Stage 2 - Production
-FROM node:18-alpine AS production
+# Instalar bcryptjs para compatibilidade com Alpine
+RUN npm uninstall bcrypt 2>/dev/null || true && npm install bcryptjs
 
-WORKDIR /app
-
-# Instalar PM2 globalmente e dependências do sistema
-RUN npm install -g pm2 && \
-    apk add --no-cache python3 make g++
-
-# Copiar arquivos de configuração
-COPY package*.json ./
-
-# Instalar apenas dependências de produção
-RUN npm ci --only=production --silent && \
-    npm cache clean --force
-
-# Copiar código compilado do stage anterior
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-
-# Copiar arquivos necessários
-COPY start.sh ./
-RUN chmod +x start.sh
-
-# Instalar bcryptjs (substituto do bcrypt para Alpine)
-RUN npm uninstall bcrypt 2>/dev/null || true && \
-    npm install bcryptjs --silent --only=production
-
-# Criar arquivo de configuração do PM2
-RUN echo '{ \
-  "name": "kimono-api", \
-  "script": "dist/index.js", \
-  "instances": 1, \
-  "exec_mode": "fork", \
-  "max_memory_restart": "512M", \
-  "restart_delay": 2000, \
-  "max_restarts": 10, \
-  "kill_timeout": 5000, \
-  "wait_ready": true, \
-  "listen_timeout": 10000, \
-  "env": { \
-    "NODE_ENV": "production", \
-    "PORT": "4000" \
-  }, \
-  "error_file": "/dev/stderr", \
-  "out_file": "/dev/stdout", \
-  "log_file": "/dev/stdout", \
-  "time": true \
-}' > ecosystem.config.json
-
-# Criar usuário não-root para segurança
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S kimono -u 1001
+# Alterar ownership dos arquivos
+RUN chown -R nextjs:nodejs /app
+USER nextjs
 
 # Definir variáveis de ambiente
 ENV NODE_ENV=production
@@ -83,12 +43,8 @@ ENV PORT=4000
 # Expor porta
 EXPOSE 4000
 
-# Mudar para usuário não-root
-USER kimono
+# Usar dumb-init para gerenciar processos
+ENTRYPOINT ["dumb-init", "--"]
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:4000/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
-
-# Usar PM2 para rodar a aplicação
-CMD ["pm2-runtime", "start", "ecosystem.config.json"] 
+# Comando para iniciar a aplicação
+CMD ["npm", "start"]

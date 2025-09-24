@@ -1,0 +1,40 @@
+# Dockerfile simplificado para EasyPanel
+FROM node:18-slim
+
+WORKDIR /app
+
+# Instalar dependências do sistema
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copiar arquivos de dependências
+COPY package*.json ./
+COPY tsconfig.json ./
+
+# Instalar dependências
+RUN npm ci --only=production
+
+# Copiar código fonte
+COPY . .
+
+# Gerar Prisma client
+RUN npx prisma generate
+
+# Compilar TypeScript
+RUN npm run build
+
+# Limpar arquivos desnecessários
+RUN rm -rf src/ && npm ci --only=production
+
+# Definir variáveis de ambiente
+ENV NODE_ENV=production
+ENV PORT=4000
+
+# Expor porta
+EXPOSE 4000
+
+# Comando para iniciar
+CMD ["node", "dist/index.js"]
