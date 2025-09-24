@@ -25,8 +25,6 @@ router.patch('/admin/status', auth, isAdmin, ordersController.adminUpdateOrderSt
 // ✅ NOVA ROTA: Cancelar pedidos expirados e restaurar estoque
 router.post('/admin/cancel-expired', auth, isAdmin, ordersController.cancelExpiredOrders);
 
-// ✅ NOVA ROTA: Testar redução de estoque
-router.post('/admin/test-reduce-stock/:orderId', auth, isAdmin, ordersController.testReduceStock);
 
 // ✅ NOVA ROTA: Consultar informações de estoque em tempo real
 router.get('/stock-info', ordersController.getStockInfo); // Rota pública para consulta de estoque

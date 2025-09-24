@@ -1727,36 +1727,6 @@ const reduceStockOnPaymentApproved = async (orderId: number) => {
   }
 };
 
-/**
- * ✅ ENDPOINT PARA TESTAR REDUÇÃO DE ESTOQUE
- * Endpoint administrativo para testar a redução manual de estoque
- */
-export const testReduceStock = async (req: Request, res: Response) => {
-  try {
-    const { orderId } = req.params;
-    
-    if (!orderId || isNaN(Number(orderId))) {
-      return res.status(400).json({
-        error: 'ID do pedido inválido'
-      });
-    }
-
-    const result = await reduceStockOnPaymentApproved(Number(orderId));
-    
-    return res.json({
-      success: true,
-      message: 'Estoque reduzido com sucesso',
-      result
-    });
-
-  } catch (error: any) {
-    console.error('Erro ao testar redução de estoque:', error);
-    return res.status(500).json({
-      error: 'Erro ao reduzir estoque',
-      message: error.message
-    });
-  }
-};
 
 // ✅ FUNÇÃO PARA ATUALIZAR USO DO CUPOM QUANDO PAGAMENTO É APROVADO
 const updateCouponUsage = async (orderId: number) => {

@@ -82,7 +82,18 @@ export const getFilteredProducts = async (req: Request, res: Response) => {
     } = req.query;
 
     // Construir o where para o Prisma
-    const where: Prisma.ProductWhereInput = {};
+    const where: Prisma.ProductWhereInput = {
+      // ✅ FILTRO PRINCIPAL: Excluir produtos excluídos permanentemente
+      name: {
+        not: {
+          startsWith: "[INDISPONÍVEL]"
+        }
+      },
+      // Excluir o produto de referência "Produto Removido"
+      NOT: {
+        name: "Produto Removido"
+      }
+    };
 
     // Filtrar por categoria
     if (categoryId && !isNaN(Number(categoryId))) {
@@ -232,6 +243,18 @@ export const getFilteredProducts = async (req: Request, res: Response) => {
 export const getAllProducts = async (_req: Request, res: Response) => {
   try {
     const products = await prisma.product.findMany({
+      where: {
+        // ✅ FILTRO: Excluir produtos excluídos permanentemente
+        name: {
+          not: {
+            startsWith: "[INDISPONÍVEL]"
+          }
+        },
+        // Excluir o produto de referência "Produto Removido"
+        NOT: {
+          name: "Produto Removido"
+        }
+      },
       include: includeRelations,
     });
     
@@ -269,8 +292,20 @@ export const getProductById = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'ID inválido' });
     }
     
-    const product = await prisma.product.findUnique({
-      where: { id: productId },
+    const product = await prisma.product.findFirst({
+      where: { 
+        id: productId,
+        // ✅ FILTRO: Excluir produtos excluídos permanentemente
+        name: {
+          not: {
+            startsWith: "[INDISPONÍVEL]"
+          }
+        },
+        // Excluir o produto de referência "Produto Removido"
+        NOT: {
+          name: "Produto Removido"
+        }
+      },
       include: includeRelations,
     });
     
