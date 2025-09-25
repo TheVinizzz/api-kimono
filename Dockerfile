@@ -23,6 +23,7 @@ RUN npm run build
 # Instalar bcryptjs (substituto do bcrypt para Alpine)
 RUN npm uninstall bcrypt 2>/dev/null || true && npm install bcryptjs
 
+
 # Definir variáveis de ambiente
 ENV NODE_ENV=production
 ENV PORT=4000
