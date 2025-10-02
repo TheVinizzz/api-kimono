@@ -52,31 +52,34 @@ const path_1 = __importDefault(require("path"));
 const config_1 = __importDefault(require("./config"));
 const websocket_service_1 = __importDefault(require("./services/websocket.service"));
 const order_service_1 = require("./services/order.service");
-// Importar rotas
+const tracking_service_1 = require("./services/tracking.service");
+// Importação de rotas
 const auth_routes_1 = __importDefault(require("./routes/auth.routes"));
+const products_routes_1 = __importDefault(require("./routes/products.routes"));
 const categories_routes_1 = __importDefault(require("./routes/categories.routes"));
 const brands_routes_1 = __importDefault(require("./routes/brands.routes"));
-const products_routes_1 = __importDefault(require("./routes/products.routes"));
 const orders_routes_1 = __importDefault(require("./routes/orders.routes"));
-const admin_routes_1 = __importDefault(require("./routes/admin.routes"));
 const addresses_routes_1 = __importDefault(require("./routes/addresses.routes"));
-const payment_routes_1 = __importDefault(require("./routes/payment.routes"));
-const mercadopago_routes_1 = __importDefault(require("./routes/mercadopago.routes"));
-const analytics_routes_1 = __importDefault(require("./routes/analytics.routes"));
 const upload_routes_1 = __importDefault(require("./routes/upload.routes"));
-const product_images_routes_1 = __importDefault(require("./routes/product-images.routes"));
+const payment_routes_1 = __importDefault(require("./routes/payment.routes"));
+const shipping_routes_1 = __importDefault(require("./routes/shipping.routes"));
 const bling_routes_1 = __importDefault(require("./routes/bling.routes"));
 const bling_oauth_routes_1 = __importDefault(require("./routes/bling-oauth.routes"));
 const bling_sync_routes_1 = __importDefault(require("./routes/bling-sync.routes"));
-const shipping_routes_1 = __importDefault(require("./routes/shipping.routes"));
-const shipping_labels_routes_1 = __importDefault(require("./routes/shipping-labels.routes"));
 const correios_routes_1 = __importDefault(require("./routes/correios.routes"));
-const settings_routes_1 = __importDefault(require("./routes/settings.routes"));
 const invoice_routes_1 = __importDefault(require("./routes/invoice.routes"));
 const thermal_invoice_routes_1 = __importDefault(require("./routes/thermal-invoice.routes"));
+const shipping_labels_routes_1 = __importDefault(require("./routes/shipping-labels.routes"));
+const mercadopago_routes_1 = __importDefault(require("./routes/mercadopago.routes"));
+const admin_routes_1 = __importDefault(require("./routes/admin.routes"));
+const analytics_routes_1 = __importDefault(require("./routes/analytics.routes"));
+const settings_routes_1 = __importDefault(require("./routes/settings.routes"));
+const product_images_routes_1 = __importDefault(require("./routes/product-images.routes"));
+const tracking_routes_1 = __importDefault(require("./routes/tracking.routes"));
+const coupons_routes_1 = __importDefault(require("./routes/coupons.routes"));
 // Inicializar o app
 const app = (0, express_1.default)();
-let server;
+let server; // Changed to any to avoid type issues with express.Server
 // Configuração CORS unificada e permissiva
 app.use((0, cors_1.default)({
     origin: '*', // Permitir qualquer origem
@@ -161,6 +164,7 @@ app.use('/api/mercadopago', mercadopago_routes_1.default);
 app.use('/api/analytics', analytics_routes_1.default);
 app.use('/api/upload', upload_routes_1.default);
 app.use('/api/product-images', product_images_routes_1.default);
+app.use('/api/tracking', tracking_routes_1.default);
 app.use('/api/bling', bling_routes_1.default);
 app.use('/api/bling-oauth', bling_oauth_routes_1.default);
 app.use('/api/bling-sync', bling_sync_routes_1.default);
@@ -170,6 +174,7 @@ app.use('/api/correios', correios_routes_1.default);
 app.use('/api/settings', settings_routes_1.default);
 app.use('/api/invoices', invoice_routes_1.default);
 app.use('/api/thermal-invoices', thermal_invoice_routes_1.default);
+app.use('/api/coupons', coupons_routes_1.default);
 // Health check da API
 app.get('/api/health', (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
@@ -305,6 +310,14 @@ server = app.listen(PORT, '0.0.0.0', () => {
     catch (error) {
         console.error('❌ Erro ao inicializar WebSocket:', error);
     }
+    // Inicializar serviço de rastreamento automático
+    try {
+        tracking_service_1.trackingService.startAutomaticTracking(60); // Verifica a cada hora
+        console.log('📦 Serviço de rastreamento automático iniciado');
+    }
+    catch (error) {
+        console.error('❌ Erro ao inicializar rastreamento automático:', error);
+    }
     // Notificar PM2 que a aplicação está pronta
     if (process.send) {
         process.send('ready');
@@ -322,12 +335,227 @@ setInterval(() => {
 }, 60000);
 // Job agendado para processar pedidos pagos e gerar códigos de rastreio automaticamente
 setInterval(() => __awaiter(void 0, void 0, void 0, function* () {
+    let executionId = '';
+    let startTime = new Date();
     try {
         console.log('🔄 Executando job agendado: processamento automático de pedidos pagos');
-        yield order_service_1.orderService.processarPedidosPagos();
-        console.log('✅ Job de processamento de pedidos e geração de códigos de rastreio concluído com sucesso');
+        // Registrar início da execução
+        startTime = new Date();
+        executionId = `auto-job-${Date.now()}`;
+        const { default: prisma } = yield Promise.resolve().then(() => __importStar(require('./config/prisma')));
+        // Verificar se há algum job já em execução
+        const lastJobSetting = yield prisma.appSettings.findUnique({
+            where: { key: 'correios_job_last_run' }
+        });
+        if (lastJobSetting === null || lastJobSetting === void 0 ? void 0 : lastJobSetting.value) {
+            try {
+                const lastJob = JSON.parse(lastJobSetting.value);
+                if (lastJob.status === 'running') {
+                    console.log('⚠️ Job anterior ainda em execução, pulando esta execução');
+                    return;
+                }
+            }
+            catch (e) {
+                console.error('Erro ao verificar último job:', e);
+            }
+        }
+        // Marcar job como em execução imediatamente
+        yield prisma.appSettings.upsert({
+            where: { key: 'correios_job_last_run' },
+            update: {
+                value: JSON.stringify({
+                    lastRun: startTime.toISOString(),
+                    nextRun: new Date(startTime.getTime() + 30 * 60 * 1000).toISOString(),
+                    status: 'running',
+                    pedidosProcessados: 0
+                })
+            },
+            create: {
+                key: 'correios_job_last_run',
+                value: JSON.stringify({
+                    lastRun: startTime.toISOString(),
+                    nextRun: new Date(startTime.getTime() + 30 * 60 * 1000).toISOString(),
+                    status: 'running',
+                    pedidosProcessados: 0
+                }),
+                category: 'correios',
+                description: 'Última execução do job de rastreamento'
+            }
+        });
+        // Criar registro de execução em andamento
+        const runningExecution = {
+            id: executionId,
+            timestamp: startTime.toISOString(),
+            status: 'running',
+            pedidosProcessados: 0
+        };
+        // Adicionar ao histórico
+        yield addToJobHistory(runningExecution, prisma);
+        console.log(`🚀 Job iniciado com ID: ${executionId}`);
+        // Executar processamento
+        const result = yield order_service_1.orderService.processarPedidosPagos();
+        // Calcular duração
+        const endTime = new Date();
+        const durationSeconds = Math.round((endTime.getTime() - startTime.getTime()) / 1000);
+        console.log(`⏱️ Job concluído em ${durationSeconds} segundos`);
+        // Atualizar registro com sucesso
+        const successExecution = Object.assign(Object.assign({}, runningExecution), { status: 'success', pedidosProcessados: result.processados, duracao: durationSeconds });
+        // Atualizar histórico
+        yield updateJobInHistory(executionId, successExecution, prisma);
+        // Atualizar última execução
+        yield prisma.appSettings.upsert({
+            where: { key: 'correios_job_last_run' },
+            update: {
+                value: JSON.stringify({
+                    lastRun: startTime.toISOString(),
+                    nextRun: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+                    status: 'success',
+                    pedidosProcessados: result.processados
+                })
+            },
+            create: {
+                key: 'correios_job_last_run',
+                value: JSON.stringify({
+                    lastRun: startTime.toISOString(),
+                    nextRun: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+                    status: 'success',
+                    pedidosProcessados: result.processados
+                }),
+                category: 'correios',
+                description: 'Última execução do job de rastreamento'
+            }
+        });
+        console.log(`✅ Job ${executionId} concluído com sucesso. ${result.processados} pedidos processados.`);
     }
     catch (error) {
-        console.error('❌ Erro ao executar job de processamento de pedidos:', error);
+        console.error(`❌ Erro no job ${executionId}:`, error);
+        // Registrar erro no histórico
+        try {
+            const { default: prisma } = yield Promise.resolve().then(() => __importStar(require('./config/prisma')));
+            const endTime = new Date();
+            const durationSeconds = Math.round((endTime.getTime() - startTime.getTime()) / 1000);
+            const errorExecution = {
+                id: executionId || `auto-job-error-${Date.now()}`,
+                timestamp: startTime.toISOString(),
+                status: 'error',
+                pedidosProcessados: 0,
+                duracao: durationSeconds,
+                errorMessage: error instanceof Error ? error.message : 'Erro desconhecido'
+            };
+            // Se o executionId existe, atualizar no histórico, senão adicionar novo
+            if (executionId) {
+                yield updateJobInHistory(executionId, errorExecution, prisma);
+            }
+            else {
+                yield addToJobHistory(errorExecution, prisma);
+            }
+            // Atualizar última execução com erro
+            yield prisma.appSettings.upsert({
+                where: { key: 'correios_job_last_run' },
+                update: {
+                    value: JSON.stringify({
+                        lastRun: startTime.toISOString(),
+                        nextRun: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+                        status: 'error',
+                        errorMessage: error instanceof Error ? error.message : 'Erro desconhecido'
+                    })
+                },
+                create: {
+                    key: 'correios_job_last_run',
+                    value: JSON.stringify({
+                        lastRun: startTime.toISOString(),
+                        nextRun: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+                        status: 'error',
+                        errorMessage: error instanceof Error ? error.message : 'Erro desconhecido'
+                    }),
+                    category: 'correios',
+                    description: 'Última execução do job de rastreamento'
+                }
+            });
+        }
+        catch (saveError) {
+            console.error('❌ Erro ao salvar registro de erro do job:', saveError);
+        }
     }
-}), 30 * 60 * 1000); // Executar a cada 30 minutos 
+}), 30 * 60 * 1000); // A cada 30 minutos
+// Funções auxiliares para manipulação do histórico
+function addToJobHistory(execution, prisma) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const historySetting = yield prisma.appSettings.findUnique({
+                where: { key: 'correios_job_history' }
+            });
+            let historico = [];
+            if (historySetting === null || historySetting === void 0 ? void 0 : historySetting.value) {
+                try {
+                    historico = JSON.parse(historySetting.value);
+                    if (!Array.isArray(historico)) {
+                        historico = [];
+                    }
+                }
+                catch (e) {
+                    console.error('Erro ao fazer parse do histórico:', e);
+                    historico = [];
+                }
+            }
+            // Adicionar nova execução no início e manter apenas as últimas 10
+            historico = [execution, ...historico].slice(0, 10);
+            yield prisma.appSettings.upsert({
+                where: { key: 'correios_job_history' },
+                update: { value: JSON.stringify(historico) },
+                create: {
+                    key: 'correios_job_history',
+                    value: JSON.stringify(historico),
+                    category: 'correios',
+                    description: 'Histórico de execuções do job de rastreamento'
+                }
+            });
+        }
+        catch (error) {
+            console.error('Erro ao adicionar ao histórico:', error);
+        }
+    });
+}
+function updateJobInHistory(executionId, updatedExecution, prisma) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const historySetting = yield prisma.appSettings.findUnique({
+                where: { key: 'correios_job_history' }
+            });
+            let historico = [];
+            if (historySetting === null || historySetting === void 0 ? void 0 : historySetting.value) {
+                try {
+                    historico = JSON.parse(historySetting.value);
+                    if (!Array.isArray(historico)) {
+                        historico = [];
+                    }
+                }
+                catch (e) {
+                    console.error('Erro ao fazer parse do histórico:', e);
+                    historico = [];
+                }
+            }
+            // Atualizar execução existente ou adicionar nova
+            const existingIndex = historico.findIndex((item) => item.id === executionId);
+            if (existingIndex >= 0) {
+                historico[existingIndex] = updatedExecution;
+            }
+            else {
+                historico = [updatedExecution, ...historico].slice(0, 10);
+            }
+            yield prisma.appSettings.upsert({
+                where: { key: 'correios_job_history' },
+                update: { value: JSON.stringify(historico) },
+                create: {
+                    key: 'correios_job_history',
+                    value: JSON.stringify(historico),
+                    category: 'correios',
+                    description: 'Histórico de execuções do job de rastreamento'
+                }
+            });
+        }
+        catch (error) {
+            console.error('Erro ao atualizar histórico:', error);
+        }
+    });
+}

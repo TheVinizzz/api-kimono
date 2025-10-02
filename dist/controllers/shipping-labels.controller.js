@@ -93,15 +93,18 @@ const getPendingShippingLabels = (req, res) => __awaiter(void 0, void 0, void 0,
         // Calcular data de 10 dias atrás
         const tenDaysAgo = new Date();
         tenDaysAgo.setDate(tenDaysAgo.getDate() - 10);
-        // Buscar todos os pedidos pagos dos últimos 10 dias com filtros mais permissivos
+        // Buscar apenas pedidos que foram processados pelos Correios (têm código de rastreio válido)
+        // ✅ EXCLUIR pedidos de retirada local
         const orders = yield prisma.order.findMany({
             where: {
                 AND: [
                     {
                         OR: [
-                            { status: 'PAID' },
+                            { status: 'PAID' }, // ✅ INCLUIR pedidos pagos
                             { status: 'PROCESSING' },
                             { status: 'SHIPPED' },
+                            { status: 'IN_TRANSIT' },
+                            { status: 'OUT_FOR_DELIVERY' },
                             { status: 'DELIVERED' }
                         ]
                     },
@@ -110,7 +113,28 @@ const getPendingShippingLabels = (req, res) => __awaiter(void 0, void 0, void 0,
                             gte: tenDaysAgo
                         }
                     },
-                    { total: { gt: 0 } }
+                    { total: { gt: 0 } },
+                    // ✅ EXCLUIR pedidos de retirada local
+                    {
+                        NOT: {
+                            shippingMethod: 'LOCAL_PICKUP'
+                        }
+                    },
+                    // ✅ APENAS pedidos com código de rastreio VÁLIDO dos Correios
+                    {
+                        trackingNumber: {
+                            not: null
+                        }
+                    },
+                    {
+                        NOT: {
+                            OR: [
+                                { trackingNumber: '' },
+                                { trackingNumber: 'Não disponível' },
+                                { trackingNumber: 'Ainda não disponível' }
+                            ]
+                        }
+                    },
                 ]
             },
             include: {
@@ -143,9 +167,21 @@ const getPendingShippingLabels = (req, res) => __awaiter(void 0, void 0, void 0,
                 { createdAt: 'desc' }
             ]
         });
-        console.log(`Encontrados ${orders.length} pedidos pagos nos últimos 10 dias`);
+        console.log(`Encontrados ${orders.length} pedidos processados pelos Correios nos últimos 10 dias`);
+        // Filtrar pedidos com código de rastreio válido dos Correios (formato BR: XX123456789XX)
+        const validOrders = orders.filter(order => {
+            if (!order.trackingNumber)
+                return false;
+            const trackingCode = order.trackingNumber.trim();
+            // Validar formato do código dos Correios (13 caracteres: 2 letras + 9 números + 2 letras)
+            const correiosPattern = /^[A-Z]{2}[0-9]{9}[A-Z]{2}$/;
+            const isValidCorreiosCode = correiosPattern.test(trackingCode);
+            console.log(`📦 Pedido ${order.id}: Código ${trackingCode} - ${isValidCorreiosCode ? 'VÁLIDO' : 'INVÁLIDO'}`);
+            return isValidCorreiosCode;
+        });
+        console.log(`✅ ${validOrders.length} pedidos com códigos de rastreio válidos dos Correios`);
         // Processar dados do endereço de entrega com mais tolerância
-        const processedOrders = orders.map(order => {
+        const processedOrders = validOrders.map(order => {
             var _a, _b, _c, _d, _e, _f, _g, _h;
             let shippingData = null;
             console.log(`🔍 Processando pedido ${order.id}:`);
@@ -331,6 +367,7 @@ const getPendingShippingLabels = (req, res) => __awaiter(void 0, void 0, void 0,
                 total: Number(order.total),
                 status: order.status,
                 createdAt: order.createdAt.toISOString(),
+                trackingNumber: order.trackingNumber, // ✅ Incluir código de rastreio real dos Correios
                 shippingData,
                 totalWeight: Math.max(totalWeight, 0.1), // Peso mínimo de 100g
                 itemsCount: order.items.reduce((sum, item) => sum + item.quantity, 0),
@@ -361,11 +398,12 @@ const getPendingShippingLabels = (req, res) => __awaiter(void 0, void 0, void 0,
             success: true,
             orders: processedOrders,
             count: processedOrders.length,
-            period: '10 dias',
+            period: '10 dias - Apenas pedidos processados pelos Correios',
             filters: {
                 pendingCount: processedOrders.filter(o => !o.labelPrinted).length,
                 printedCount: processedOrders.filter(o => o.labelPrinted).length,
-                validAddressCount: processedOrders.filter(o => o.hasValidAddress).length
+                validAddressCount: processedOrders.filter(o => o.hasValidAddress).length,
+                withValidTrackingCode: processedOrders.length
             }
         });
     }
@@ -422,10 +460,33 @@ const generateShippingLabel = (req, res) => __awaiter(void 0, void 0, void 0, fu
                 error: 'Pedido não encontrado'
             });
         }
+        // ✅ VERIFICAR SE É RETIRADA LOCAL - NÃO GERAR ETIQUETA
+        if (order.shippingMethod === 'LOCAL_PICKUP') {
+            return res.status(400).json({
+                success: false,
+                error: 'Pedidos de retirada local não precisam de etiqueta de envio'
+            });
+        }
         if (!order.shippingAddress) {
             return res.status(400).json({
                 success: false,
                 error: 'Pedido não possui endereço de entrega'
+            });
+        }
+        // ✅ Verificar se o pedido tem código de rastreio válido dos Correios
+        if (!order.trackingNumber || order.trackingNumber.trim() === '' ||
+            order.trackingNumber === 'Não disponível' || order.trackingNumber === 'Ainda não disponível') {
+            return res.status(400).json({
+                success: false,
+                error: 'Pedido não possui código de rastreio válido dos Correios'
+            });
+        }
+        // Validar formato do código dos Correios (13 caracteres: XX123456789XX)
+        const correiosPattern = /^[A-Z]{2}[0-9]{9}[A-Z]{2}$/;
+        if (!correiosPattern.test(order.trackingNumber.trim())) {
+            return res.status(400).json({
+                success: false,
+                error: 'Código de rastreio não está no formato válido dos Correios'
             });
         }
         // Processar endereço de entrega usando a mesma lógica da lista
@@ -654,11 +715,21 @@ const generateBatchLabels = (req, res) => __awaiter(void 0, void 0, void 0, func
                 error: 'Lista de pedidos inválida'
             });
         }
-        // Buscar pedidos
+        // Buscar pedidos com código de rastreio válido (excluindo retirada local)
         const orders = yield prisma.order.findMany({
             where: {
                 id: { in: orderIds.map(id => Number(id)) },
-                shippingAddress: { not: null }
+                shippingAddress: { not: null },
+                trackingNumber: { not: null },
+                // ✅ EXCLUIR pedidos de retirada local
+                NOT: {
+                    OR: [
+                        { trackingNumber: '' },
+                        { trackingNumber: 'Não disponível' },
+                        { trackingNumber: 'Ainda não disponível' },
+                        { shippingMethod: 'LOCAL_PICKUP' }
+                    ]
+                }
             },
             include: {
                 items: {
@@ -690,8 +761,20 @@ const generateBatchLabels = (req, res) => __awaiter(void 0, void 0, void 0, func
                 error: 'Nenhum pedido válido encontrado'
             });
         }
+        // ✅ Filtrar apenas pedidos com código de rastreio válido dos Correios
+        const correiosPattern = /^[A-Z]{2}[0-9]{9}[A-Z]{2}$/;
+        const validOrders = orders.filter(order => {
+            return order.trackingNumber && correiosPattern.test(order.trackingNumber.trim());
+        });
+        if (validOrders.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Nenhum pedido possui código de rastreio válido dos Correios'
+            });
+        }
+        console.log(`✅ Gerando etiquetas para ${validOrders.length} pedidos com códigos válidos dos Correios`);
         // Gerar PDF com múltiplas etiquetas
-        const pdfBuffer = yield generateBatchLabelsPDF(orders);
+        const pdfBuffer = yield generateBatchLabelsPDF(validOrders);
         // Configurar headers para download
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="etiquetas-lote-${Date.now()}.pdf"`);
@@ -725,8 +808,8 @@ function generateLabelPDF(order, shippingData, totalWeight) {
                 });
                 // Buscar dados da empresa das configurações
                 const senderInfo = yield getSenderInfo();
-                // Gerar código QR para rastreamento
-                const trackingCode = `KIMONO${order.id.toString().padStart(8, '0')}`;
+                // Usar código de rastreio REAL dos Correios (se disponível) ou gerar código temporário
+                const trackingCode = order.trackingNumber || `TEMP${order.id.toString().padStart(8, '0')}`;
                 const qrCodeUrl = yield qrcode_1.default.toDataURL(trackingCode);
                 const qrCodeBuffer = Buffer.from(qrCodeUrl.split(',')[1], 'base64');
                 // Cabeçalho - Remetente
@@ -764,16 +847,28 @@ function generateLabelPDF(order, shippingData, totalWeight) {
                 doc.text(`Data: ${new Date(order.createdAt).toLocaleDateString('pt-BR')}`, 15, 195);
                 doc.text(`Peso aprox.: ${totalWeight.toFixed(1)}kg`, 15, 205);
                 doc.text(`Itens: ${order.items.length}`, 15, 215);
-                // Código de barras (simulado com código de rastreamento)
+                // Código de rastreamento dos Correios (se disponível)
                 doc.fontSize(10).font('Helvetica-Bold');
-                doc.text(trackingCode, 15, 230);
+                if (order.trackingNumber) {
+                    doc.text(`CORREIOS: ${order.trackingNumber}`, 15, 230);
+                }
+                else {
+                    doc.text(`TEMP: ${trackingCode}`, 15, 230);
+                }
                 // QR Code
                 doc.image(qrCodeBuffer, 200, 200, { width: 60, height: 60 });
                 // Código de rastreamento legível
                 doc.fontSize(6).font('Helvetica');
-                doc.text('Código de rastreamento:', 15, 270);
-                doc.fontSize(8).font('Helvetica-Bold');
-                doc.text(trackingCode, 15, 280);
+                if (order.trackingNumber) {
+                    doc.text('Código de rastreamento Correios:', 15, 270);
+                    doc.fontSize(8).font('Helvetica-Bold');
+                    doc.text(order.trackingNumber, 15, 280);
+                }
+                else {
+                    doc.text('Código temporário (aguardando Correios):', 15, 270);
+                    doc.fontSize(8).font('Helvetica-Bold');
+                    doc.text(trackingCode, 15, 280);
+                }
                 // Instruções de manuseio
                 doc.fontSize(6).font('Helvetica');
                 doc.text('CORREIOS - ENTREGA EXPRESSA', 15, 300);
@@ -808,6 +903,8 @@ function generateBatchLabelsPDF(orders) {
                 });
                 // Buscar dados da empresa das configurações
                 const senderInfo = yield getSenderInfo();
+                // Padrão para validar códigos dos Correios
+                const correiosPattern = /^[A-Z]{2}[0-9]{9}[A-Z]{2}$/;
                 // Processar cada pedido
                 for (let i = 0; i < orders.length; i++) {
                     const order = orders[i];
@@ -816,6 +913,11 @@ function generateBatchLabelsPDF(orders) {
                     const addressString = (_a = order.shippingAddress) === null || _a === void 0 ? void 0 : _a.trim();
                     if (!addressString || addressString === '{}') {
                         console.error(`Endereço vazio para pedido ${order.id}`);
+                        continue;
+                    }
+                    // ✅ Validar código de rastreio antes de processar
+                    if (!order.trackingNumber || !correiosPattern.test(order.trackingNumber.trim())) {
+                        console.error(`Código de rastreio inválido para pedido ${order.id}: ${order.trackingNumber}`);
                         continue;
                     }
                     // Tentar processar como JSON primeiro
@@ -938,7 +1040,7 @@ function generateBatchLabelsPDF(orders) {
                         doc.addPage();
                     }
                     // Gerar conteúdo da etiqueta (similar ao individual, mas ajustado para A4)
-                    const trackingCode = `KIMONO${order.id.toString().padStart(8, '0')}`;
+                    const trackingCode = order.trackingNumber || `TEMP${order.id.toString().padStart(8, '0')}`;
                     // Título da etiqueta
                     doc.fontSize(10).font('Helvetica-Bold');
                     doc.text(`ETIQUETA DE ENVIO - PEDIDO #${order.id}`, 50, 50);
@@ -969,7 +1071,13 @@ function generateBatchLabelsPDF(orders) {
                     doc.fontSize(7).font('Helvetica');
                     doc.text(`Data: ${new Date(order.createdAt).toLocaleDateString('pt-BR')}`, 50, 240);
                     doc.text(`Peso: ${totalWeight.toFixed(1)}kg`, 50, 250);
-                    doc.text(`Código: ${trackingCode}`, 50, 260);
+                    // Código de rastreamento real ou temporário
+                    if (order.trackingNumber) {
+                        doc.text(`Código Correios: ${order.trackingNumber}`, 50, 260);
+                    }
+                    else {
+                        doc.text(`Código Temp: ${trackingCode}`, 50, 260);
+                    }
                     // Linha separadora para próxima etiqueta
                     if (i < orders.length - 1) {
                         doc.moveTo(50, 300).lineTo(550, 300).dash(5, { space: 5 }).stroke();

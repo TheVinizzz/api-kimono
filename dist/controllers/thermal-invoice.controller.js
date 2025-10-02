@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -20,47 +53,39 @@ const qrcode_1 = __importDefault(require("qrcode"));
 function getCompanyInfo() {
     return __awaiter(this, void 0, void 0, function* () {
         try {
-            const settings = yield prisma_1.default.appSettings.findMany({
+            // Usar a mesma função que as etiquetas 58mm usam para garantir consistência
+            const { getOriginInfo } = yield Promise.resolve().then(() => __importStar(require('./settings.controller')));
+            const originInfo = yield getOriginInfo();
+            // Buscar dados adicionais de CNPJ e email das configurações
+            const additionalSettings = yield prisma_1.default.appSettings.findMany({
                 where: {
                     key: {
-                        in: [
-                            'shipping_origin_name',
-                            'shipping_origin_address',
-                            'shipping_origin_neighborhood',
-                            'shipping_origin_city',
-                            'shipping_origin_state',
-                            'shipping_origin_zipcode',
-                            'shipping_origin_phone',
-                            'shipping_origin_cnpj',
-                            'shipping_origin_email'
-                        ]
+                        in: ['shipping_origin_cnpj', 'shipping_origin_email']
                     }
                 }
             });
-            const map = Object.fromEntries(settings.map(s => [s.key, s.value]));
+            const settingsMap = Object.fromEntries(additionalSettings.map(s => [s.key, s.value]));
             return {
-                name: map['shipping_origin_name'] || 'Sua Empresa Ltda',
-                address: map['shipping_origin_address']
-                    ? `${map['shipping_origin_address']}${map['shipping_origin_neighborhood'] ? ', ' + map['shipping_origin_neighborhood'] : ''}`
-                    : 'Rua Exemplo, 123',
-                city: map['shipping_origin_city'] || 'São Paulo',
-                state: map['shipping_origin_state'] || 'SP',
-                zipCode: map['shipping_origin_zipcode'] || '01000-000',
-                phone: map['shipping_origin_phone'] || '(11) 1234-5678',
-                email: map['shipping_origin_email'] || 'contato@empresa.com.br',
-                cnpj: map['shipping_origin_cnpj'] || '00.000.000/0001-00'
+                name: originInfo.name || 'Kimono Store',
+                address: originInfo.address || 'Rua das Flores, 123',
+                city: originInfo.city || 'São Paulo',
+                state: originInfo.state || 'SP',
+                zipCode: originInfo.zipCode || '01310-100',
+                phone: originInfo.phone || '(11) 99999-9999',
+                email: settingsMap['shipping_origin_email'] || 'contato@kimonostore.com',
+                cnpj: settingsMap['shipping_origin_cnpj'] || '00.000.000/0001-00'
             };
         }
         catch (error) {
             console.error('Erro ao obter dados da empresa:', error);
             return {
-                name: 'Sua Empresa Ltda',
-                address: 'Rua Exemplo, 123, Centro',
+                name: 'Kimono Store',
+                address: 'Rua das Flores, 123',
                 city: 'São Paulo',
                 state: 'SP',
-                zipCode: '01000-000',
-                phone: '(11) 1234-5678',
-                email: 'contato@empresa.com.br',
+                zipCode: '01310-100',
+                phone: '(11) 99999-9999',
+                email: 'contato@kimonostore.com',
                 cnpj: '00.000.000/0001-00'
             };
         }

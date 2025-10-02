@@ -58,7 +58,7 @@ exports.CORREIOS_CONFIG = {
             listaLocalidadesUf: '/cep/v1/localidades/' // Adicionar a UF ao final
         },
         prepostagem: {
-            criar: '/prepostagem/v1/objetos'
+            criar: '/prepostagem/v1/prepostagens' // Endpoint correto para produção
         },
         rastreamento: {
             consulta: '/srorastro/v1/objetos'

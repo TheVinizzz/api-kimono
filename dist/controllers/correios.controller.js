@@ -9,11 +9,16 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.rastrearObjeto = exports.statusPublico = exports.verificarStatusIntegracao = exports.testarConexao = exports.processarPedidosPagos = exports.gerarCodigoRastreio = void 0;
+exports.obterHistoricoJob = exports.rastrearObjeto = exports.statusPublico = exports.verificarStatusIntegracao = exports.testarConexao = exports.processarPedidosPagos = exports.gerarCodigoRastreio = void 0;
 const order_service_1 = require("../services/order.service");
 const correios_service_1 = require("../services/correios.service");
+const client_1 = require("@prisma/client");
+const prisma = new client_1.PrismaClient();
+// Chave para armazenar o histórico de jobs no AppSettings
+const JOB_HISTORY_KEY = 'correios_job_history';
+const JOB_LAST_RUN_KEY = 'correios_job_last_run';
 /**
- * Gerar código de rastreio para um pedido
+ * Gerar código de rastreio para um pedido específico
  */
 const gerarCodigoRastreio = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
@@ -23,23 +28,18 @@ const gerarCodigoRastreio = (req, res) => __awaiter(void 0, void 0, void 0, func
                 error: 'ID do pedido inválido'
             });
         }
-        const codigoRastreio = yield order_service_1.orderService.gerarCodigoRastreio(Number(orderId));
-        if (!codigoRastreio) {
-            return res.status(400).json({
-                error: 'Não foi possível gerar código de rastreio. Verifique se o pedido está pago e se a configuração dos Correios está correta.'
-            });
-        }
+        const result = yield order_service_1.orderService.gerarCodigoRastreio(Number(orderId));
         return res.json({
             success: true,
-            orderId: Number(orderId),
-            trackingNumber: codigoRastreio,
+            trackingNumber: result.trackingNumber,
             message: 'Código de rastreio gerado com sucesso'
         });
     }
     catch (error) {
         console.error('Erro ao gerar código de rastreio:', error);
         return res.status(500).json({
-            error: 'Erro interno do servidor'
+            error: 'Erro interno do servidor',
+            message: error.message
         });
     }
 });
@@ -49,16 +49,68 @@ exports.gerarCodigoRastreio = gerarCodigoRastreio;
  */
 const processarPedidosPagos = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        yield order_service_1.orderService.processarPedidosPagos();
+        // Registrar início da execução
+        const startTime = new Date();
+        const executionId = `job-${Date.now()}`;
+        // Criar registro de execução em andamento
+        const runningExecution = {
+            id: executionId,
+            timestamp: startTime.toISOString(),
+            status: 'running',
+            pedidosProcessados: 0
+        };
+        // Salvar registro de execução em andamento
+        yield saveJobExecution(runningExecution);
+        // Executar processamento de pedidos
+        const result = yield order_service_1.orderService.processarPedidosPagos();
+        // Calcular duração
+        const endTime = new Date();
+        const durationSeconds = Math.round((endTime.getTime() - startTime.getTime()) / 1000);
+        // Atualizar registro com sucesso
+        const successExecution = Object.assign(Object.assign({}, runningExecution), { status: 'success', pedidosProcessados: result.processados, duracao: durationSeconds });
+        // Salvar registro atualizado
+        yield saveJobExecution(successExecution);
+        // Atualizar última execução
+        yield updateLastJobRun({
+            lastRun: startTime.toISOString(),
+            nextRun: calculateNextRun(),
+            status: 'success',
+            pedidosProcessados: result.processados
+        });
         return res.json({
             success: true,
-            message: 'Processamento de pedidos pagos iniciado com sucesso'
+            message: 'Processamento de pedidos pagos iniciado com sucesso',
+            processados: result.processados,
+            executionId
         });
     }
     catch (error) {
         console.error('Erro ao processar pedidos pagos:', error);
+        // Se temos um ID de execução em andamento, atualizamos com erro
+        try {
+            const executionId = `job-${Date.now()}`;
+            const errorExecution = {
+                id: executionId,
+                timestamp: new Date().toISOString(),
+                status: 'error',
+                pedidosProcessados: 0,
+                errorMessage: error.message || 'Erro desconhecido'
+            };
+            yield saveJobExecution(errorExecution);
+            // Atualizar última execução
+            yield updateLastJobRun({
+                lastRun: new Date().toISOString(),
+                nextRun: calculateNextRun(),
+                status: 'error',
+                errorMessage: error.message || 'Erro desconhecido'
+            });
+        }
+        catch (saveError) {
+            console.error('Erro ao salvar registro de erro:', saveError);
+        }
         return res.status(500).json({
-            error: 'Erro interno do servidor'
+            error: 'Erro interno do servidor',
+            message: error.message
         });
     }
 });
@@ -92,7 +144,8 @@ const testarConexao = (req, res) => __awaiter(void 0, void 0, void 0, function* 
     catch (error) {
         console.error('Erro ao testar conexão com Correios:', error);
         return res.status(500).json({
-            error: 'Erro interno do servidor'
+            error: 'Erro interno do servidor',
+            message: error.message
         });
     }
 });
@@ -123,6 +176,8 @@ const verificarStatusIntegracao = (req, res) => __awaiter(void 0, void 0, void 0
         }
         // Verificar pedidos pendentes
         const pedidosPendentes = yield order_service_1.orderService.contarPedidosPagosAguardandoRastreio();
+        // Obter última execução do job
+        const lastJobRun = yield getLastJobRun();
         return res.json({
             success: true,
             status: {
@@ -131,7 +186,8 @@ const verificarStatusIntegracao = (req, res) => __awaiter(void 0, void 0, void 0
                 tokenValido,
                 ultimaAtualizacaoToken,
                 pedidosPendentes,
-                ambiente: process.env.CORREIOS_AMBIENTE || 'HOMOLOGACAO'
+                ambiente: process.env.CORREIOS_AMBIENTE || 'HOMOLOGACAO',
+                lastJobRun
             },
             detalhesErro,
             timestamp: new Date().toISOString()
@@ -181,33 +237,184 @@ const statusPublico = (_req, res) => __awaiter(void 0, void 0, void 0, function*
 });
 exports.statusPublico = statusPublico;
 /**
- * Rastrear objeto pelos Correios
+ * Rastrear um objeto pelos Correios
  */
 const rastrearObjeto = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { codigoRastreio } = req.params;
-        if (!codigoRastreio || codigoRastreio.length < 13) {
+        if (!codigoRastreio) {
             return res.status(400).json({
-                error: 'Código de rastreio inválido'
+                error: 'Código de rastreio não fornecido'
             });
         }
-        const rastreamento = yield correios_service_1.correiosService.rastrearObjeto(codigoRastreio);
-        if (!rastreamento) {
-            return res.status(404).json({
-                error: 'Código de rastreio não encontrado ou inválido'
-            });
-        }
+        const resultado = yield correios_service_1.correiosService.rastrearObjeto(codigoRastreio);
         return res.json({
             success: true,
             codigoRastreio,
-            rastreamento
+            rastreamento: resultado
         });
     }
     catch (error) {
         console.error('Erro ao rastrear objeto:', error);
         return res.status(500).json({
-            error: 'Erro interno do servidor'
+            error: 'Erro interno do servidor',
+            message: error.message
         });
     }
 });
 exports.rastrearObjeto = rastrearObjeto;
+/**
+ * Obter histórico de execuções do job de rastreamento
+ */
+const obterHistoricoJob = (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const historico = yield getJobHistory();
+        return res.json({
+            success: true,
+            historico
+        });
+    }
+    catch (error) {
+        console.error('Erro ao obter histórico de jobs:', error);
+        return res.status(500).json({
+            error: 'Erro interno do servidor',
+            message: error.message
+        });
+    }
+});
+exports.obterHistoricoJob = obterHistoricoJob;
+/**
+ * Salvar uma execução no histórico de jobs
+ */
+function saveJobExecution(execution) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            // Buscar histórico atual
+            const setting = yield prisma.appSettings.findUnique({
+                where: { key: JOB_HISTORY_KEY }
+            });
+            let historico = [];
+            if (setting === null || setting === void 0 ? void 0 : setting.value) {
+                try {
+                    historico = JSON.parse(setting.value);
+                    if (!Array.isArray(historico)) {
+                        historico = [];
+                    }
+                }
+                catch (e) {
+                    console.error('Erro ao fazer parse do histórico:', e);
+                    historico = [];
+                }
+            }
+            // Verificar se já existe uma execução com esse ID
+            const existingIndex = historico.findIndex(item => item.id === execution.id);
+            if (existingIndex >= 0) {
+                // Atualizar execução existente
+                historico[existingIndex] = execution;
+            }
+            else {
+                // Adicionar nova execução
+                historico = [execution, ...historico].slice(0, 10); // Manter apenas as 10 últimas
+            }
+            // Salvar histórico atualizado
+            yield prisma.appSettings.upsert({
+                where: { key: JOB_HISTORY_KEY },
+                update: { value: JSON.stringify(historico) },
+                create: {
+                    key: JOB_HISTORY_KEY,
+                    value: JSON.stringify(historico),
+                    category: 'correios',
+                    description: 'Histórico de execuções do job de rastreamento'
+                }
+            });
+        }
+        catch (error) {
+            console.error('Erro ao salvar execução de job:', error);
+            throw error;
+        }
+    });
+}
+/**
+ * Obter histórico de execuções do job
+ */
+function getJobHistory() {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const setting = yield prisma.appSettings.findUnique({
+                where: { key: JOB_HISTORY_KEY }
+            });
+            if (!(setting === null || setting === void 0 ? void 0 : setting.value)) {
+                return [];
+            }
+            try {
+                const historico = JSON.parse(setting.value);
+                return Array.isArray(historico) ? historico : [];
+            }
+            catch (e) {
+                console.error('Erro ao fazer parse do histórico:', e);
+                return [];
+            }
+        }
+        catch (error) {
+            console.error('Erro ao obter histórico de jobs:', error);
+            return [];
+        }
+    });
+}
+/**
+ * Atualizar informações da última execução do job
+ */
+function updateLastJobRun(data) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            yield prisma.appSettings.upsert({
+                where: { key: JOB_LAST_RUN_KEY },
+                update: { value: JSON.stringify(data) },
+                create: {
+                    key: JOB_LAST_RUN_KEY,
+                    value: JSON.stringify(data),
+                    category: 'correios',
+                    description: 'Última execução do job de rastreamento'
+                }
+            });
+        }
+        catch (error) {
+            console.error('Erro ao atualizar última execução do job:', error);
+            throw error;
+        }
+    });
+}
+/**
+ * Obter informações da última execução do job
+ */
+function getLastJobRun() {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const setting = yield prisma.appSettings.findUnique({
+                where: { key: JOB_LAST_RUN_KEY }
+            });
+            if (!(setting === null || setting === void 0 ? void 0 : setting.value)) {
+                return null;
+            }
+            try {
+                return JSON.parse(setting.value);
+            }
+            catch (e) {
+                console.error('Erro ao fazer parse da última execução:', e);
+                return null;
+            }
+        }
+        catch (error) {
+            console.error('Erro ao obter última execução do job:', error);
+            return null;
+        }
+    });
+}
+/**
+ * Calcular próxima execução programada (30 minutos após a atual)
+ */
+function calculateNextRun() {
+    const nextRun = new Date();
+    nextRun.setMinutes(nextRun.getMinutes() + 30);
+    return nextRun.toISOString();
+}

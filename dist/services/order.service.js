@@ -50,6 +50,9 @@ class OrderService {
                         paymentId: orderData.paymentId,
                         // Endereço de entrega completo
                         shippingAddress: `${orderData.address.street}, ${orderData.address.number}${orderData.address.complement ? ', ' + orderData.address.complement : ''}, ${orderData.address.neighborhood}, ${orderData.address.city} - ${orderData.address.state}, ${orderData.address.zipCode}`,
+                        // Método e custo de envio
+                        shippingMethod: orderData.shippingMethod || 'STANDARD',
+                        shippingCost: orderData.shippingCost || 0,
                         // Items do pedido
                         items: {
                             create: orderData.items.map(item => ({
@@ -110,6 +113,9 @@ class OrderService {
                         paymentId: orderData.paymentId,
                         // Endereço de entrega completo
                         shippingAddress: `${orderData.address.street}, ${orderData.address.number}${orderData.address.complement ? ', ' + orderData.address.complement : ''}, ${orderData.address.neighborhood}, ${orderData.address.city} - ${orderData.address.state}, ${orderData.address.zipCode}`,
+                        // Método e custo de envio
+                        shippingMethod: orderData.shippingMethod || 'STANDARD',
+                        shippingCost: orderData.shippingCost || 0,
                         // Items do pedido
                         items: {
                             create: orderData.items.map(item => ({
@@ -304,210 +310,291 @@ class OrderService {
             }
         });
     }
-    // Gerar código de rastreio dos Correios para um pedido pago
+    /**
+     * Gerar código de rastreio para um pedido específico
+     * @param orderId ID do pedido
+     * @returns Objeto com o código de rastreio
+     */
     gerarCodigoRastreio(orderId) {
         return __awaiter(this, void 0, void 0, function* () {
-            var _a;
             try {
-                console.log(`📮 Gerando código de rastreio para pedido ${orderId}...`);
-                // Buscar pedido completo com itens
-                const order = yield prisma_1.default.order.findUnique({
+                console.log(`📦 Gerando código de rastreio para pedido ${orderId}`);
+                // Buscar pedido com endereço
+                const pedido = yield prisma_1.default.order.findUnique({
                     where: { id: orderId },
                     include: {
                         items: {
                             include: {
-                                product: true
+                                product: {
+                                    select: {
+                                        id: true,
+                                        name: true,
+                                        weight: true,
+                                        height: true,
+                                        width: true,
+                                        length: true
+                                    }
+                                },
+                                productVariant: {
+                                    select: {
+                                        id: true,
+                                        weight: true
+                                    }
+                                }
+                            }
+                        },
+                        user: {
+                            select: {
+                                id: true,
+                                name: true,
+                                email: true
                             }
                         }
                     }
                 });
-                if (!order) {
-                    console.error('❌ Pedido não encontrado:', orderId);
-                    return null;
+                if (!pedido) {
+                    throw new Error(`Pedido ${orderId} não encontrado`);
                 }
-                // Verificar se pedido está pago
-                if (order.status !== 'PAID' && order.paymentStatus !== 'PAID') {
-                    console.log('⚠️ Pedido ainda não foi pago, aguardando confirmação de pagamento');
-                    return null;
-                }
-                // Verificar se já possui código de rastreio
-                if (order.trackingNumber && order.trackingNumber !== 'Não disponível') {
-                    console.log('✅ Pedido já possui código de rastreio:', order.trackingNumber);
-                    return order.trackingNumber;
-                }
-                // Validar configuração dos Correios
-                if (!correios_service_1.correiosService.validateConfig()) {
-                    console.error('❌ Configuração dos Correios incompleta');
-                    return null;
-                }
-                // Extrair dados do endereço com tratamento robusto
-                let logradouro = '';
-                let numero = '';
-                let complemento = '';
-                let bairro = '';
-                let cidade = '';
-                let uf = '';
-                let cep = '';
-                // Tentar extrair do formato padrão primeiro
-                try {
-                    if (order.shippingAddress) {
-                        const enderecoPartes = order.shippingAddress.split(', ');
-                        if (enderecoPartes.length >= 4) {
-                            // Formato padrão: "Rua X, 123, Bairro, Cidade - UF, CEP"
-                            const [logradouroNumero, bairroParte, cidadeUFParte, cepParte] = enderecoPartes;
-                            // Extrair logradouro e número
-                            const logradouroMatch = logradouroNumero.match(/(.*?)(?:\s*,\s*(\d+.*)|$)/);
-                            if (logradouroMatch) {
-                                logradouro = logradouroMatch[1] || '';
-                                numero = logradouroMatch[2] || '';
-                            }
-                            bairro = bairroParte || '';
-                            // Extrair cidade e UF
-                            const cidadeUFMatch = cidadeUFParte ? cidadeUFParte.match(/(.*?)\s*-\s*([A-Z]{2})/) : null;
-                            if (cidadeUFMatch) {
-                                cidade = cidadeUFMatch[1] || '';
-                                uf = cidadeUFMatch[2] || '';
-                            }
-                            else {
-                                cidade = cidadeUFParte || '';
-                            }
-                            // Limpar CEP
-                            cep = cepParte ? cepParte.replace(/\D/g, '') : '';
+                // ✅ VERIFICAR SE É RETIRADA LOCAL - NÃO GERAR CÓDIGO DE RASTREIO
+                if (pedido.shippingMethod === 'LOCAL_PICKUP') {
+                    console.log(`🏪 Pedido ${orderId} é para retirada local - não gerando código de rastreio dos Correios`);
+                    // Atualizar pedido para status de processamento sem código de rastreio
+                    yield prisma_1.default.order.update({
+                        where: { id: orderId },
+                        data: {
+                            status: 'PROCESSING',
+                            trackingNumber: null,
+                            shippingCarrier: null,
+                            updatedAt: new Date()
                         }
-                    }
-                }
-                catch (parseError) {
-                    console.error('⚠️ Erro ao fazer parse do endereço:', parseError);
-                }
-                // Verificar se temos os campos mínimos necessários
-                if (!logradouro || !numero || !bairro || !cidade || !uf || !cep) {
-                    console.log('⚠️ Endereço incompleto, tentando extrair de campos individuais...');
-                    // Tentar usar campos individuais se disponíveis (se existirem no futuro)
-                    // Nota: Atualmente o modelo Order não possui esses campos separados
-                    // Poderia ser implementado no futuro para melhorar a robustez
-                    // Como fallback, usar endereço de entrega completo se disponível
-                    if (order.shippingAddress) {
-                        console.log('⚠️ Usando endereço completo como fallback');
-                        logradouro = logradouro || 'Endereço não especificado';
-                        numero = numero || 'S/N';
-                        bairro = bairro || 'Centro';
-                        cidade = cidade || 'Cidade não especificada';
-                        uf = uf || 'SP'; // Fallback para SP
-                        cep = cep || '00000000'; // Fallback inválido, provavelmente falhará
-                    }
-                }
-                // Validar dados mínimos para envio
-                if (!logradouro || !cidade || !uf || !cep || cep.length !== 8) {
-                    console.error('❌ Dados de endereço insuficientes para gerar etiqueta:', {
-                        logradouro: !!logradouro,
-                        cidade: !!cidade,
-                        uf: !!uf,
-                        cep: cep,
-                        cepValido: cep.length === 8
                     });
-                    return null;
+                    return { trackingNumber: 'RETIRADA_LOCAL' };
                 }
-                // Calcular peso total dos itens (estimativa de 400g por item como padrão para kimono)
-                const pesoTotal = ((_a = order.items) === null || _a === void 0 ? void 0 : _a.reduce((total, item) => {
-                    var _a;
-                    // Usar peso do produto se disponível, senão usar padrão
-                    const pesoProduto = ((_a = item.product) === null || _a === void 0 ? void 0 : _a.weightGrams) || 400;
-                    return total + (item.quantity * pesoProduto);
-                }, 0)) || 400; // Peso padrão se não houver itens
-                // Preparar dados para prepostagem
-                const dadosPrepostagem = {
-                    orderId: order.id,
+                // Verificar se o pedido já tem código de rastreio válido
+                if (pedido.trackingNumber &&
+                    pedido.trackingNumber !== '' &&
+                    pedido.trackingNumber !== 'Não disponível' &&
+                    pedido.trackingNumber !== 'Ainda não disponível' &&
+                    pedido.trackingNumber.length >= 13) { // Código dos Correios tem pelo menos 13 caracteres
+                    console.log(`⚠️ Pedido ${orderId} já possui código de rastreio válido: ${pedido.trackingNumber}`);
+                    return { trackingNumber: pedido.trackingNumber };
+                }
+                // Verificar se o pedido está pago
+                if (pedido.status !== 'PAID' && pedido.paymentStatus !== 'PAID') {
+                    throw new Error(`Pedido ${orderId} não está pago. Status: ${pedido.status}, PaymentStatus: ${pedido.paymentStatus}`);
+                }
+                // Verificar se tem paymentId para confirmar que foi processado pelo gateway
+                if (!pedido.paymentId) {
+                    throw new Error(`Pedido ${orderId} não possui ID de pagamento. Pode não ter sido processado corretamente.`);
+                }
+                // Verificar se tem email do cliente
+                if (!pedido.customerEmail) {
+                    throw new Error(`Pedido ${orderId} não possui email do cliente`);
+                }
+                // Verificar se tem endereço de entrega
+                if (!pedido.shippingAddress) {
+                    throw new Error(`Pedido ${orderId} não possui endereço de entrega`);
+                }
+                // ✅ COMPLETAR DADOS DO CLIENTE COM INFORMAÇÕES DO USUÁRIO
+                let customerName = pedido.customerName;
+                let customerPhone = pedido.customerPhone;
+                let customerDocument = pedido.customerDocument;
+                // Se o pedido tem usuário vinculado e dados estão faltando, completar
+                if (pedido.user) {
+                    if (!customerName && pedido.user.name) {
+                        customerName = pedido.user.name;
+                        console.log(`✅ Nome do cliente completado com dados do usuário: ${customerName}`);
+                    }
+                    // Telefone e documento não estão no modelo User, usar apenas dados do pedido
+                    // Atualizar o pedido com os dados completos se nome foi alterado
+                    if (customerName !== pedido.customerName) {
+                        yield prisma_1.default.order.update({
+                            where: { id: orderId },
+                            data: {
+                                customerName: customerName || pedido.customerName
+                            }
+                        });
+                        console.log(`✅ Nome do cliente atualizado no pedido ${orderId}`);
+                    }
+                }
+                // Obter endereço do pedido com melhor tratamento
+                let endereco = null;
+                try {
+                    // Primeiro tenta fazer parse como JSON
+                    if (pedido.shippingAddress.startsWith('{')) {
+                        endereco = JSON.parse(pedido.shippingAddress);
+                    }
+                    else {
+                        // Se não for JSON, tenta extrair do formato string
+                        endereco = this.parseEnderecoString(pedido.shippingAddress, customerName);
+                    }
+                }
+                catch (error) {
+                    console.error(`❌ Erro ao processar endereço do pedido ${orderId}:`, error);
+                    console.log(`- shippingAddress raw: ${pedido.shippingAddress}`);
+                    console.log(`- shippingAddress length: ${pedido.shippingAddress.length}`);
+                    console.log(`- shippingAddress type: ${typeof pedido.shippingAddress}`);
+                    // Última tentativa: extrair do formato string
+                    try {
+                        endereco = this.parseEnderecoString(pedido.shippingAddress, customerName);
+                    }
+                    catch (parseError) {
+                        throw new Error(`Endereço do pedido ${orderId} não é válido e não pode ser processado`);
+                    }
+                }
+                // Validar campos obrigatórios do endereço
+                if (!endereco || !endereco.zipCode) {
+                    throw new Error(`Endereço do pedido ${orderId} não possui CEP`);
+                }
+                if (!endereco.city || !endereco.state) {
+                    throw new Error(`Endereço do pedido ${orderId} não possui cidade ou estado`);
+                }
+                if (!endereco.street || !endereco.number) {
+                    throw new Error(`Endereço do pedido ${orderId} não possui logradouro ou número`);
+                }
+                // ✅ GARANTIR QUE O NOME ESTEJA NO ENDEREÇO
+                if (!endereco.name) {
+                    endereco.name = customerName || 'Destinatário';
+                }
+                // ✅ GARANTIR QUE DOCUMENTO E TELEFONE ESTEJAM DISPONÍVEIS
+                if (!endereco.document && customerDocument) {
+                    endereco.document = customerDocument;
+                }
+                if (!endereco.phone && customerPhone) {
+                    endereco.phone = customerPhone;
+                }
+                if (!endereco.email && pedido.customerEmail) {
+                    endereco.email = pedido.customerEmail;
+                }
+                // Calcular peso total do pedido considerando variações
+                const pesoTotal = pedido.items.reduce((total, item) => {
+                    var _a, _b;
+                    // Usar peso da variação se disponível, senão usar peso do produto
+                    const peso = ((_a = item.productVariant) === null || _a === void 0 ? void 0 : _a.weight) || ((_b = item.product) === null || _b === void 0 ? void 0 : _b.weight) || 0.5;
+                    return total + (peso * item.quantity);
+                }, 0);
+                // Peso mínimo de 100g
+                const pesoFinal = Math.max(pesoTotal, 0.1);
+                console.log(`📋 Dados COMPLETOS do pedido ${orderId}:`);
+                console.log(`- Destinatário: ${endereco.name}`);
+                console.log(`- Email: ${endereco.email}`);
+                console.log(`- Documento cliente: ${endereco.document || 'NÃO INFORMADO'}`);
+                console.log(`- Telefone cliente: ${endereco.phone || 'NÃO INFORMADO'}`);
+                console.log(`- Endereço completo: ${pedido.shippingAddress}`);
+                console.log(`- Endereço parseado:`);
+                console.log(`  • Logradouro: ${endereco.street}`);
+                console.log(`  • Número: ${endereco.number}`);
+                console.log(`  • Bairro: ${endereco.neighborhood}`);
+                console.log(`  • Cidade: ${endereco.city}`);
+                console.log(`  • Estado: ${endereco.state}`);
+                console.log(`  • CEP: ${endereco.zipCode}`);
+                console.log(`- Peso total: ${pesoFinal}kg`);
+                console.log(`- Valor: R$ ${pedido.total}`);
+                // Chamar serviço dos Correios com dados COMPLETOS
+                const resultado = yield correios_service_1.correiosService.criarPrepostagemPedido({
+                    orderId: pedido.id,
                     destinatario: {
-                        nome: order.customerName || 'Cliente',
-                        documento: order.customerDocument || '',
-                        telefone: order.customerPhone ? order.customerPhone.replace(/\D/g, '') : undefined,
-                        email: order.customerEmail || undefined,
+                        nome: endereco.name,
+                        documento: endereco.document || customerDocument || '',
+                        telefone: endereco.phone || customerPhone || '',
+                        email: endereco.email || pedido.customerEmail,
                         endereco: {
-                            logradouro: logradouro,
-                            numero: numero || 'S/N',
-                            complemento: complemento || '',
-                            bairro: bairro || 'Centro', // Usar "Centro" como fallback
-                            cidade: cidade,
-                            uf: uf,
-                            cep: cep
+                            logradouro: endereco.street,
+                            numero: endereco.number,
+                            complemento: endereco.complement || '',
+                            bairro: endereco.neighborhood,
+                            cidade: endereco.city,
+                            uf: endereco.state,
+                            cep: endereco.zipCode.replace(/\D/g, '') // Limpar CEP
                         }
                     },
-                    servico: '03298', // PAC como padrão (mais econômico)
-                    peso: pesoTotal,
-                    valor: Number(order.total),
-                    observacao: `Pedido #${order.id} - Kimono Store`
-                };
-                // Criar prepostagem nos Correios com retry
-                let resultado;
-                let tentativas = 0;
-                const maxTentativas = 3;
-                while (tentativas < maxTentativas) {
-                    tentativas++;
-                    try {
-                        resultado = yield correios_service_1.correiosService.criarPrepostagemPedido(dadosPrepostagem);
-                        if (resultado && !resultado.erro) {
-                            break; // Sucesso, sair do loop
-                        }
-                        else {
-                            console.error(`❌ Tentativa ${tentativas}/${maxTentativas} falhou:`, (resultado === null || resultado === void 0 ? void 0 : resultado.mensagem) || 'Erro desconhecido');
-                            if (tentativas < maxTentativas) {
-                                // Aguardar antes de tentar novamente (backoff exponencial)
-                                const tempoEspera = Math.pow(2, tentativas) * 1000; // 2s, 4s, 8s...
-                                console.log(`⏳ Aguardando ${tempoEspera / 1000}s antes da próxima tentativa...`);
-                                yield new Promise(resolve => setTimeout(resolve, tempoEspera));
-                            }
-                        }
-                    }
-                    catch (retryError) {
-                        console.error(`❌ Erro na tentativa ${tentativas}/${maxTentativas}:`, retryError);
-                        if (tentativas < maxTentativas) {
-                            const tempoEspera = Math.pow(2, tentativas) * 1000;
-                            console.log(`⏳ Aguardando ${tempoEspera / 1000}s antes da próxima tentativa...`);
-                            yield new Promise(resolve => setTimeout(resolve, tempoEspera));
-                        }
-                    }
+                    servico: '03298', // PAC Contrato
+                    peso: pesoFinal,
+                    valor: Number(pedido.total),
+                    observacao: `Pedido #${pedido.id} - Kimono Store`
+                });
+                if (!resultado || !resultado.codigoObjeto) {
+                    throw new Error(`Não foi possível gerar código de rastreio para o pedido ${orderId}. Resposta dos Correios: ${JSON.stringify(resultado)}`);
                 }
-                if (!resultado || resultado.erro || !resultado.codigoObjeto) {
-                    console.error('❌ Todas as tentativas falharam ao criar prepostagem:', (resultado === null || resultado === void 0 ? void 0 : resultado.mensagem) || 'Erro desconhecido');
-                    return null;
-                }
+                const codigoRastreio = resultado.codigoObjeto;
+                console.log(`✅ Código de rastreio gerado com sucesso para o pedido ${orderId}: ${codigoRastreio}`);
                 // Atualizar pedido com código de rastreio
                 yield prisma_1.default.order.update({
                     where: { id: orderId },
                     data: {
-                        trackingNumber: resultado.codigoObjeto,
-                        shippingCarrier: 'Correios',
-                        status: 'PROCESSING' // Mover para processamento
+                        trackingNumber: codigoRastreio,
+                        status: 'PROCESSING', // Atualiza status para "em processamento"
+                        updatedAt: new Date()
                     }
                 });
-                console.log('✅ Código de rastreio gerado com sucesso:', resultado.codigoObjeto);
-                // Enviar email de notificação com o código de rastreio
+                // Enviar e-mail para o cliente com o código de rastreio
                 try {
-                    if (order.customerEmail) {
-                        // Calcular estimativa de entrega (7 dias úteis a partir de hoje)
-                        const dataEstimada = new Date();
-                        dataEstimada.setDate(dataEstimada.getDate() + 7); // +7 dias
-                        const estimatedDelivery = dataEstimada.toLocaleDateString('pt-BR');
-                        yield email_service_1.default.sendTrackingCodeNotification({
-                            orderId: order.id,
-                            customerName: order.customerName || 'Cliente',
-                            customerEmail: order.customerEmail,
-                            trackingNumber: resultado.codigoObjeto,
-                            shippingCarrier: 'Correios',
-                            estimatedDelivery: estimatedDelivery
-                        });
-                        console.log(`📧 Email com código de rastreio enviado para ${order.customerEmail}`);
-                    }
+                    yield this.enviarEmailRastreio(pedido, codigoRastreio);
                 }
                 catch (emailError) {
-                    // Não falhar o processo por causa do email
-                    console.error('⚠️ Erro ao enviar email com código de rastreio:', emailError);
+                    console.error(`❌ Erro ao enviar e-mail com código de rastreio para o pedido ${orderId}:`, emailError);
+                    // Não falhar a operação por causa do e-mail
                 }
-                return resultado.codigoObjeto;
+                return { trackingNumber: codigoRastreio };
             }
             catch (error) {
-                console.error('❌ Erro ao gerar código de rastreio:', error);
-                return null;
+                console.error(`❌ Erro ao gerar código de rastreio para o pedido ${orderId}:`, error);
+                throw error;
+            }
+        });
+    }
+    /**
+     * Enviar e-mail com código de rastreio para o cliente
+     * @param pedido Pedido com os dados do cliente
+     * @param codigoRastreio Código de rastreio gerado
+     */
+    enviarEmailRastreio(pedido, codigoRastreio) {
+        return __awaiter(this, void 0, void 0, function* () {
+            var _a;
+            try {
+                // Verificar se temos um e-mail para enviar
+                let emailCliente = '';
+                // Tentar obter e-mail do cliente diretamente
+                if (pedido.customerEmail) {
+                    emailCliente = pedido.customerEmail;
+                }
+                // Ou tentar obter do endereço
+                else if (pedido.shippingAddress) {
+                    try {
+                        const endereco = JSON.parse(pedido.shippingAddress);
+                        emailCliente = endereco.email || '';
+                    }
+                    catch (e) {
+                        // Ignorar erro de parse
+                    }
+                }
+                // Se não encontrou, tentar obter do usuário
+                if (!emailCliente && ((_a = pedido.user) === null || _a === void 0 ? void 0 : _a.email)) {
+                    emailCliente = pedido.user.email;
+                }
+                // Se não temos e-mail, não podemos enviar
+                if (!emailCliente) {
+                    console.log(`⚠️ Não foi possível enviar e-mail de rastreio para o pedido ${pedido.id}: e-mail não encontrado`);
+                    return;
+                }
+                // Calcular estimativa de entrega (7 dias úteis a partir de hoje)
+                const dataEstimada = new Date();
+                dataEstimada.setDate(dataEstimada.getDate() + 7); // +7 dias
+                const estimatedDelivery = dataEstimada.toLocaleDateString('pt-BR');
+                // Enviar e-mail
+                yield email_service_1.default.sendTrackingCodeNotification({
+                    orderId: pedido.id,
+                    customerName: pedido.customerName || 'Cliente',
+                    customerEmail: emailCliente,
+                    trackingNumber: codigoRastreio,
+                    shippingCarrier: 'Correios',
+                    estimatedDelivery: estimatedDelivery
+                });
+                console.log(`📧 E-mail com código de rastreio enviado para ${emailCliente}`);
+            }
+            catch (error) {
+                console.error(`❌ Erro ao enviar e-mail de rastreio:`, error);
+                throw error;
             }
         });
     }
@@ -516,14 +603,20 @@ class OrderService {
         return __awaiter(this, void 0, void 0, function* () {
             try {
                 console.log('🔄 Processando pedidos pagos sem código de rastreio...');
-                // Buscar pedidos pagos sem código de rastreio
+                // Buscar pedidos pagos nos últimos 10 dias para evitar processar pedidos muito antigos
+                const dataLimite = new Date();
+                dataLimite.setDate(dataLimite.getDate() - 10);
+                // Buscar pedidos pagos sem código de rastreio com critérios mais restritivos
                 const pedidosSemRastreio = yield prisma_1.default.order.findMany({
                     where: {
-                        OR: [
-                            { status: 'PAID' },
-                            { paymentStatus: 'PAID' }
-                        ],
+                        // Deve ter status PAID E paymentStatus PAID
                         AND: [
+                            {
+                                OR: [
+                                    { status: 'PAID' },
+                                    { paymentStatus: 'PAID' }
+                                ]
+                            },
                             {
                                 OR: [
                                     { trackingNumber: null },
@@ -531,21 +624,96 @@ class OrderService {
                                     { trackingNumber: 'Não disponível' },
                                     { trackingNumber: 'Ainda não disponível' }
                                 ]
+                            },
+                            // Pedidos criados nos últimos 10 dias
+                            {
+                                createdAt: {
+                                    gte: dataLimite
+                                }
+                            },
+                            // Deve ter ID de pagamento para confirmar que foi processado
+                            {
+                                paymentId: {
+                                    not: null
+                                }
+                            },
+                            // Não deve estar cancelado
+                            {
+                                status: {
+                                    not: 'CANCELED'
+                                }
                             }
                         ]
                     },
+                    include: {
+                        items: {
+                            include: {
+                                product: {
+                                    select: {
+                                        id: true,
+                                        name: true,
+                                        weight: true,
+                                        height: true,
+                                        width: true,
+                                        length: true
+                                    }
+                                },
+                                productVariant: {
+                                    select: {
+                                        id: true,
+                                        weight: true
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    orderBy: {
+                        createdAt: 'asc' // Processar pedidos mais antigos primeiro
+                    },
                     take: 10 // Processar máximo 10 por vez
                 });
-                console.log(`📊 Encontrados ${pedidosSemRastreio.length} pedidos para processar`);
+                console.log(`📊 Encontrados ${pedidosSemRastreio.length} pedidos pagos nos últimos 10 dias`);
+                let processados = 0;
                 for (const pedido of pedidosSemRastreio) {
-                    yield this.gerarCodigoRastreio(pedido.id);
-                    // Aguarda 2 segundos entre cada chamada para não sobrecarregar a API
-                    yield new Promise(resolve => setTimeout(resolve, 2000));
+                    try {
+                        console.log(`🔍 Processando pedido ${pedido.id}:`);
+                        console.log(`- Status: ${pedido.status}`);
+                        console.log(`- PaymentStatus: ${pedido.paymentStatus}`);
+                        console.log(`- PaymentId: ${pedido.paymentId}`);
+                        console.log(`- TrackingNumber: ${pedido.trackingNumber || 'null'}`);
+                        console.log(`- CustomerEmail: ${pedido.customerEmail}`);
+                        console.log(`- Total: R$ ${pedido.total}`);
+                        console.log(`- Items: ${pedido.items.length}`);
+                        // Validação adicional antes de processar
+                        if (!pedido.customerEmail) {
+                            console.log(`⚠️ Pulando pedido ${pedido.id}: sem email do cliente`);
+                            continue;
+                        }
+                        if (!pedido.shippingAddress) {
+                            console.log(`⚠️ Pulando pedido ${pedido.id}: sem endereço de entrega`);
+                            continue;
+                        }
+                        if (pedido.items.length === 0) {
+                            console.log(`⚠️ Pulando pedido ${pedido.id}: sem itens`);
+                            continue;
+                        }
+                        yield this.gerarCodigoRastreio(pedido.id);
+                        processados++;
+                        console.log(`✅ Pedido ${pedido.id} processado com sucesso (${processados}/${pedidosSemRastreio.length})`);
+                        // Aguarda 3 segundos entre cada chamada para não sobrecarregar a API
+                        yield new Promise(resolve => setTimeout(resolve, 3000));
+                    }
+                    catch (error) {
+                        console.error(`❌ Erro ao processar pedido ${pedido.id}:`, error);
+                        // Continua para o próximo pedido mesmo se houver erro
+                    }
                 }
-                console.log('✅ Processamento de pedidos pagos concluído');
+                console.log(`✅ Processamento de pedidos pagos concluído. ${processados} de ${pedidosSemRastreio.length} pedidos processados com sucesso.`);
+                return { processados };
             }
             catch (error) {
                 console.error('❌ Erro ao processar pedidos pagos:', error);
+                throw error;
             }
         });
     }
@@ -553,13 +721,18 @@ class OrderService {
     contarPedidosPagosAguardandoRastreio() {
         return __awaiter(this, void 0, void 0, function* () {
             try {
+                // Contar apenas pedidos dos últimos 10 dias
+                const dataLimite = new Date();
+                dataLimite.setDate(dataLimite.getDate() - 10);
                 const count = yield prisma_1.default.order.count({
                     where: {
-                        OR: [
-                            { status: 'PAID' },
-                            { paymentStatus: 'PAID' }
-                        ],
                         AND: [
+                            {
+                                OR: [
+                                    { status: 'PAID' },
+                                    { paymentStatus: 'PAID' }
+                                ]
+                            },
                             {
                                 OR: [
                                     { trackingNumber: null },
@@ -567,6 +740,21 @@ class OrderService {
                                     { trackingNumber: 'Não disponível' },
                                     { trackingNumber: 'Ainda não disponível' }
                                 ]
+                            },
+                            {
+                                createdAt: {
+                                    gte: dataLimite
+                                }
+                            },
+                            {
+                                paymentId: {
+                                    not: null
+                                }
+                            },
+                            {
+                                status: {
+                                    not: 'CANCELED'
+                                }
                             }
                         ]
                     }
@@ -578,6 +766,155 @@ class OrderService {
                 return 0;
             }
         });
+    }
+    // Helper para parsear endereço de string para JSON - versão robusta
+    parseEnderecoString(addressString, customerName) {
+        var _a, _b;
+        console.log(`- Processando como endereço formatado: ${addressString}`);
+        // Separar por vírgulas
+        const parts = addressString.split(',').map(part => part.trim());
+        console.log(`- Partes separadas por vírgula:`, parts);
+        let street = '', number = '', complement = '', neighborhood = '', city = '', state = '', zipCode = '';
+        if (parts.length >= 4) {
+            // Formato padrão brasileiro: Rua, Número, Bairro, Cidade - Estado, CEP
+            street = parts[0] || '';
+            number = parts[1] || 'S/N';
+            neighborhood = parts[2] || '';
+            // A última parte pode ter CEP separado ou junto com cidade/estado
+            const lastPart = parts[parts.length - 1] || '';
+            let cityStatePart = parts[3] || '';
+            // Extrair CEP primeiro (formato brasileiro: 12345-123 ou 12345123)
+            const cepMatch = addressString.match(/(\d{5}-?\d{3})/);
+            if (cepMatch) {
+                zipCode = cepMatch[1];
+                // Remover CEP da string para processar cidade/estado
+                cityStatePart = cityStatePart.replace(cepMatch[1], '').trim();
+                // Se CEP estava em parte separada, usar a parte anterior
+                if (lastPart.includes(cepMatch[1]) && parts.length > 4) {
+                    cityStatePart = parts[3];
+                }
+            }
+            // Processar cidade e estado (formato: "Cidade - Estado" ou "Cidade/Estado")
+            if (cityStatePart.includes(' - ')) {
+                const [cityPart, statePart] = cityStatePart.split(' - ');
+                city = cityPart.trim();
+                state = statePart.trim();
+            }
+            else if (cityStatePart.includes('/')) {
+                const [cityPart, statePart] = cityStatePart.split('/');
+                city = cityPart.trim();
+                state = statePart.trim();
+            }
+            else {
+                // Tentar extrair estado como últimas 2 letras maiúsculas
+                const stateMatch = cityStatePart.match(/\b([A-Z]{2})$/);
+                if (stateMatch) {
+                    state = stateMatch[1];
+                    city = cityStatePart.replace(stateMatch[0], '').trim();
+                }
+                else {
+                    city = cityStatePart;
+                    // Tentar extrair estado do endereço completo
+                    const fullStateMatch = addressString.match(/\b([A-Z]{2})\b/);
+                    if (fullStateMatch) {
+                        state = fullStateMatch[1];
+                    }
+                }
+            }
+        }
+        else if (parts.length >= 3) {
+            // Formato mais simples: Rua, Número, Resto
+            street = parts[0] || '';
+            number = parts[1] || 'S/N';
+            // Combinar o resto e tentar extrair informações
+            const remainingText = parts.slice(2).join(', ');
+            // Extrair CEP
+            const cepMatch = remainingText.match(/(\d{5}-?\d{3})/);
+            if (cepMatch) {
+                zipCode = cepMatch[1];
+            }
+            // Extrair estado (2 letras maiúsculas)
+            const stateMatch = remainingText.match(/\b([A-Z]{2})\b/);
+            if (stateMatch) {
+                state = stateMatch[1];
+            }
+            // O que sobrar é bairro e cidade
+            let cleanText = remainingText.replace(/\d{5}-?\d{3}/, '').replace(/\b[A-Z]{2}\b/, '').replace(/[-,]+$/, '').trim();
+            // Se tem hífen, provavelmente separa bairro de cidade
+            if (cleanText.includes(' - ')) {
+                const textParts = cleanText.split(' - ');
+                neighborhood = ((_a = textParts[0]) === null || _a === void 0 ? void 0 : _a.trim()) || '';
+                city = ((_b = textParts[1]) === null || _b === void 0 ? void 0 : _b.trim()) || '';
+            }
+            else {
+                // Assumir que é tudo cidade ou dividir meio a meio
+                const words = cleanText.split(/\s+/);
+                if (words.length > 2) {
+                    neighborhood = words.slice(0, Math.floor(words.length / 2)).join(' ');
+                    city = words.slice(Math.floor(words.length / 2)).join(' ');
+                }
+                else {
+                    city = cleanText;
+                }
+            }
+        }
+        else if (parts.length >= 2) {
+            // Mínimo: Rua, Número
+            street = parts[0] || '';
+            number = parts[1] || 'S/N';
+            // Tentar extrair outras informações do primeiro campo se for muito longo
+            if (street.length > 50) {
+                const streetParts = street.split(/\s+/);
+                if (streetParts.length > 3) {
+                    street = streetParts.slice(0, 3).join(' ');
+                    // O resto pode ser bairro
+                    neighborhood = streetParts.slice(3).join(' ');
+                }
+            }
+            city = 'Cidade não informada';
+        }
+        else {
+            // Apenas um campo - provavelmente endereço completo mal formatado
+            street = addressString;
+            number = 'S/N';
+            city = 'Verificar endereço';
+        }
+        // Limpar e formatar campos
+        street = street.replace(/^(Rua|Av|Avenida|R\.|Av\.)\s*/i, '').trim();
+        number = number.replace(/[^\d\-A-Za-z]/g, '') || 'S/N';
+        neighborhood = neighborhood.replace(/^[-,\s]+|[-,\s]+$/g, '');
+        city = city.replace(/^[-,\s]+|[-,\s]+$/g, '');
+        state = state.replace(/[^A-Z]/g, '');
+        zipCode = zipCode.replace(/[^\d\-]/g, '');
+        // Garantir formato do CEP
+        if (zipCode && zipCode.length === 8 && !zipCode.includes('-')) {
+            zipCode = zipCode.substring(0, 5) + '-' + zipCode.substring(5);
+        }
+        // Limpeza do logradouro (remover prefixos comuns)
+        const cleanStreet = (str) => {
+            if (!str)
+                return str;
+            return str.replace(/^(Rua|Av\.?|Avenida|Travessa|Alameda|Praça|R\.)\s+/i, '').trim();
+        };
+        const cleanedStreet = cleanStreet(street);
+        console.log(`🔧 Limpeza do logradouro:`);
+        console.log(`- Original: "${street}"`);
+        console.log(`- Limpo: "${cleanedStreet}"`);
+        const endereco = {
+            name: customerName || 'Destinatário',
+            street: cleanedStreet || 'Endereço não disponível',
+            number: number || 'S/N',
+            complement: complement,
+            neighborhood: neighborhood || '',
+            city: city || 'Cidade não informada',
+            state: state || '',
+            zipCode: zipCode || '',
+            document: '', // Não disponível na string
+            phone: '', // Não disponível na string
+            email: '', // Não disponível na string
+        };
+        console.log(`- Endereço extraído da string:`, endereco);
+        return endereco;
     }
 }
 // Exportar uma instância única do serviço

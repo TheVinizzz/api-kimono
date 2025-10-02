@@ -41,6 +41,9 @@ const router = (0, express_1.Router)();
 router.post('/register', authController.register);
 router.post('/login', authController.login);
 router.post('/logout', authController.logout);
+router.post('/request-password-reset', authController.requestPasswordReset);
+router.post('/validate-reset-token', authController.validateResetToken);
+router.post('/reset-password', authController.resetPassword);
 // Rotas de debug (apenas para ambiente de desenvolvimento)
 router.get('/debug', authController.debugAuth);
 // Rotas protegidas

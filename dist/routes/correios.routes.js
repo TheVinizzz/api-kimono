@@ -34,15 +34,16 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
-const auth_1 = require("../middleware/auth");
 const correiosController = __importStar(require("../controllers/correios.controller"));
+const auth_1 = require("../middleware/auth");
 const router = (0, express_1.Router)();
-// Rotas administrativas (requerem autenticação de admin)
+// Rotas privadas (requerem autenticação de admin)
 router.post('/gerar-rastreio/:orderId', auth_1.auth, auth_1.isAdmin, correiosController.gerarCodigoRastreio);
 router.post('/processar-pedidos', auth_1.auth, auth_1.isAdmin, correiosController.processarPedidosPagos);
 router.get('/testar-conexao', auth_1.auth, auth_1.isAdmin, correiosController.testarConexao);
 router.get('/status-integracao', auth_1.auth, auth_1.isAdmin, correiosController.verificarStatusIntegracao);
+router.get('/historico-job', auth_1.auth, auth_1.isAdmin, correiosController.obterHistoricoJob);
 // Rotas públicas
-router.get('/rastrear/:codigoRastreio', correiosController.rastrearObjeto);
 router.get('/status', correiosController.statusPublico);
+router.get('/rastrear/:codigoRastreio', correiosController.rastrearObjeto);
 exports.default = router;

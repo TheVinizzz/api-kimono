@@ -984,6 +984,24 @@ export const processCheckoutPix = async (req: Request, res: Response) => {
     });
 
     console.log('✅ Pedido criado:', order.id);
+    
+    // ✅ INCREMENTAR CONTADOR DE USO DO CUPOM SE APLICÁVEL
+    if (checkoutData.couponId && discountAmount > 0) {
+      try {
+        await prisma.coupon.update({
+          where: { id: checkoutData.couponId },
+          data: {
+            usedCount: {
+              increment: 1
+            }
+          }
+        });
+        console.log(`🎟️ Contador de uso do cupom ${checkoutData.couponCode} incrementado`);
+      } catch (couponError) {
+        console.error(`❌ Erro ao incrementar uso do cupom:`, couponError);
+        // Não falhamos o pedido por erro no cupom, apenas logamos
+      }
+    }
 
     // ✅ 2️⃣ DEPOIS: PROCESSAR PIX
     const [firstName, ...lastNameParts] = (order.user?.name || '').split(' ');
@@ -1182,7 +1200,9 @@ export const processCheckoutCard = async (req: Request, res: Response) => {
       subtotal,
       discountAmount,
       finalTotal: orderTotal,
-      hasCoupon: !!orderData.couponCode
+      hasCoupon: !!orderData.couponCode,
+      couponId: orderData.couponId,
+      couponCode: orderData.couponCode
     });
     
     const order = await prisma.order.create({
@@ -1229,6 +1249,24 @@ export const processCheckoutCard = async (req: Request, res: Response) => {
     });
 
     console.log('✅ Pedido criado:', order.id);
+    
+    // ✅ INCREMENTAR CONTADOR DE USO DO CUPOM SE APLICÁVEL
+    if (orderData.couponId && discountAmount > 0) {
+      try {
+        await prisma.coupon.update({
+          where: { id: orderData.couponId },
+          data: {
+            usedCount: {
+              increment: 1
+            }
+          }
+        });
+        console.log(`🎟️ Contador de uso do cupom ${orderData.couponCode} incrementado`);
+      } catch (couponError) {
+        console.error(`❌ Erro ao incrementar uso do cupom:`, couponError);
+        // Não falhamos o pedido por erro no cupom, apenas logamos
+      }
+    }
 
     // ✅ 2️⃣ DEPOIS: PROCESSAR CARTÃO
     console.log('💳 Dados do cartão para tokenização:', {

@@ -12,13 +12,14 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.testRealCheckout = exports.testOrderData = exports.testStockReduction = exports.testUserCardData = exports.debugCheckoutCard = exports.testApprovedPayment = exports.testFullCardPayment = exports.testCardToken = exports.processCheckoutBoleto = exports.processCheckoutCard = exports.processCheckoutPix = exports.getPixQrCode = exports.mercadoPagoWebhook = exports.checkPaymentStatus = exports.processPixPayment = exports.processCreditCardPayment = void 0;
+exports.testRealCheckout = exports.testOrderData = exports.testStockReduction = exports.testUserCardData = exports.debugCheckoutCard = exports.testApprovedPayment = exports.testFullCardPayment = exports.testCardToken = exports.processCheckoutBoleto = exports.processCheckoutCard = exports.processCheckoutPix = exports.getMercadoPagoConfig = exports.getPixQrCode = exports.mercadoPagoWebhook = exports.checkPaymentStatus = exports.processPixPayment = exports.processCreditCardPayment = void 0;
 const zod_1 = require("zod");
 const crypto_1 = __importDefault(require("crypto"));
 const prisma_1 = __importDefault(require("../config/prisma"));
 const mercadopago_service_1 = __importDefault(require("../services/mercadopago.service"));
 const validation_1 = require("../utils/validation");
 const orders_controller_1 = require("./orders.controller");
+const config_1 = __importDefault(require("../config"));
 // ===== CONTROLLER MERCADO PAGO PROFISSIONAL (2025) =====
 // Implementação com validações robustas e segurança aprimorada
 // Chave secreta do webhook (obtida do painel do Mercado Pago)
@@ -370,16 +371,43 @@ const processPixPayment = (req, res) => __awaiter(void 0, void 0, void 0, functi
             external_reference: String(order.id),
             notification_url: `${process.env.API_URL || 'http://localhost:4000'}/api/mercadopago/webhook`
         });
-        // ✅ ATUALIZAR PEDIDO
-        const updatedOrder = yield prisma_1.default.order.update({
-            where: { id: orderId },
+        // ✅ 3️⃣ ATUALIZAR PEDIDO COM ID DO PAGAMENTO E STATUS CORRETO
+        const orderStatus = mercadopago_service_1.default.mapMercadoPagoStatusToOrderStatus(payment.status);
+        yield prisma_1.default.order.update({
+            where: { id: order.id },
             data: {
                 paymentId: String(payment.id),
-                paymentMethod: 'PIX',
-                status: mercadopago_service_1.default.mapMercadoPagoStatusToOrderStatus(payment.status),
+                status: orderStatus,
                 updatedAt: new Date()
             }
         });
+        console.log('✅ Pedido atualizado com status:', {
+            orderId: order.id,
+            paymentId: payment.id,
+            mpStatus: payment.status,
+            orderStatus
+        });
+        // ✅ SE PAGAMENTO FOI APROVADO IMEDIATAMENTE, REDUZIR ESTOQUE
+        if (orderStatus === 'PAID') {
+            console.log('🎉 Pagamento PIX aprovado imediatamente - reduzindo estoque:', order.id);
+            try {
+                yield (0, orders_controller_1.reduceStockOnPaymentApproved)(order.id);
+                console.log(`📦 Estoque reduzido automaticamente para o pedido ${order.id}`);
+            }
+            catch (stockError) {
+                console.error(`❌ Erro ao reduzir estoque do pedido ${order.id}:`, stockError);
+            }
+            // ✅ ATUALIZAR USO DO CUPOM
+            if (order.couponId) {
+                try {
+                    yield (0, orders_controller_1.updateCouponUsage)(order.id);
+                    console.log(`🎟️ Uso do cupom registrado para o pedido ${order.id}`);
+                }
+                catch (couponError) {
+                    console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${order.id}:`, couponError);
+                }
+            }
+        }
         // ✅ OBTER INFORMAÇÕES DO QR CODE
         const pixInfo = yield mercadopago_service_1.default.getPixInfo(String(payment.id));
         console.log('✅ PIX processado com sucesso:', {
@@ -392,7 +420,7 @@ const processPixPayment = (req, res) => __awaiter(void 0, void 0, void 0, functi
             success: true,
             message: 'PIX gerado com sucesso',
             data: {
-                orderId: updatedOrder.id,
+                orderId: order.id,
                 paymentId: payment.id,
                 status: payment.status,
                 orderStatus: mercadopago_service_1.default.mapMercadoPagoStatusToOrderStatus(payment.status),
@@ -475,6 +503,25 @@ const checkPaymentStatus = (req, res) => __awaiter(void 0, void 0, void 0, funct
                         updatedAt: new Date()
                     }
                 });
+                // ✅ PROCESSAR APROVAÇÃO DE PAGAMENTO (se mudou para PAID)
+                if (orderStatus === 'PAID' && order.status !== 'PAID') {
+                    console.log('🎉 Pagamento aprovado via checkPaymentStatus - pedido:', order.id);
+                    // ✅ REDUZIR ESTOQUE AUTOMATICAMENTE
+                    try {
+                        yield (0, orders_controller_1.reduceStockOnPaymentApproved)(order.id);
+                        console.log(`📦 Estoque reduzido automaticamente via checkPaymentStatus para o pedido ${order.id}`);
+                    }
+                    catch (stockError) {
+                        console.error(`❌ Erro ao reduzir estoque via checkPaymentStatus do pedido ${order.id}:`, stockError);
+                    }
+                    // ✅ ATUALIZAR USO DO CUPOM
+                    try {
+                        yield (0, orders_controller_1.updateCouponUsage)(order.id);
+                    }
+                    catch (couponError) {
+                        console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${order.id}:`, couponError);
+                    }
+                }
             }
             console.log('✅ Status consultado:', {
                 orderId,
@@ -606,6 +653,13 @@ const mercadoPagoWebhook = (req, res) => __awaiter(void 0, void 0, void 0, funct
                 catch (stockError) {
                     console.error(`❌ Erro ao reduzir estoque via webhook do pedido ${orderId}:`, stockError);
                 }
+                // ✅ ATUALIZAR USO DO CUPOM
+                try {
+                    yield (0, orders_controller_1.updateCouponUsage)(orderId);
+                }
+                catch (couponError) {
+                    console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${orderId}:`, couponError);
+                }
                 // TODO: Enviar email de confirmação
                 // TODO: Gerar nota fiscal
             }
@@ -721,6 +775,33 @@ const getPixQrCode = (req, res) => __awaiter(void 0, void 0, void 0, function* (
     }
 });
 exports.getPixQrCode = getPixQrCode;
+// ✅ ENDPOINT PÚBLICO: OBTER CONFIGURAÇÕES DO MERCADO PAGO PARA O FRONTEND
+const getMercadoPagoConfig = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        console.log('🔧 Fornecendo configurações públicas do Mercado Pago...');
+        return res.status(200).json({
+            success: true,
+            message: 'Configurações do Mercado Pago obtidas com sucesso',
+            data: {
+                publicKey: config_1.default.mercadopago.publicKey,
+                environment: config_1.default.mercadopago.environment,
+                currency: config_1.default.mercadopago.defaultCurrency,
+                country: config_1.default.mercadopago.defaultCountry,
+                maxInstallments: config_1.default.mercadopago.maxInstallments,
+                pixExpirationMinutes: config_1.default.mercadopago.pixExpirationMinutes,
+                boletoExpirationDays: config_1.default.mercadopago.boletoExpirationDays
+            }
+        });
+    }
+    catch (error) {
+        console.error('❌ Erro ao obter configurações do Mercado Pago:', error);
+        return res.status(500).json({
+            error: 'Erro interno do servidor',
+            code: 'INTERNAL_SERVER_ERROR'
+        });
+    }
+});
+exports.getMercadoPagoConfig = getMercadoPagoConfig;
 // ✅ NOVO ENDPOINT: PROCESSAR PIX DIRETO DO CHECKOUT
 const processCheckoutPix = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
@@ -732,6 +813,7 @@ const processCheckoutPix = (req, res) => __awaiter(void 0, void 0, void 0, funct
             });
         }
         console.log('🛒 Processando PIX direto do checkout...');
+        console.log('📋 Dados recebidos:', JSON.stringify(req.body, null, 2));
         // Validar dados de entrada do checkout
         const checkoutData = req.body.orderData;
         if (!checkoutData || !checkoutData.items || !checkoutData.cpfCnpj) {
@@ -752,30 +834,49 @@ const processCheckoutPix = (req, res) => __awaiter(void 0, void 0, void 0, funct
         // ✅ 1️⃣ PRIMEIRO: CRIAR O PEDIDO COM TOTAL CORRETO (INCLUINDO FRETE)
         const productsTotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
         const orderTotal = checkoutData.total || productsTotal; // Usar total do frontend (inclui frete) ou calcular produtos
+        // Calcular subtotal (produtos + frete) e desconto
+        const subtotal = productsTotal + (checkoutData.shippingCost || 0);
+        const discountAmount = checkoutData.couponCode ? (subtotal - orderTotal) : 0;
         console.log('💰 Calculando total do pedido:', {
             productsTotal,
             totalFromFrontend: checkoutData.total,
             finalTotal: orderTotal,
-            shippingCost: checkoutData.shippingCost
+            shippingCost: checkoutData.shippingCost,
+            subtotal,
+            discountAmount,
+            hasCoupon: !!checkoutData.couponCode
         });
         const order = yield prisma_1.default.order.create({
             data: {
                 userId: req.user.id,
-                total: orderTotal, // ✅ USAR TOTAL QUE INCLUI FRETE
+                total: orderTotal, // ✅ USAR TOTAL QUE INCLUI FRETE E DESCONTO
+                subtotal: subtotal, // ✅ VALOR ANTES DO DESCONTO
+                discountAmount: discountAmount > 0 ? discountAmount : null, // ✅ VALOR DO DESCONTO
+                couponId: checkoutData.couponId || null, // ✅ ID DO CUPOM (se aplicável)
                 status: 'PENDING',
                 paymentMethod: 'PIX',
                 customerEmail: checkoutData.email,
                 customerName: req.user.name || '',
                 customerPhone: checkoutData.phone || '',
                 customerDocument: cpfCnpj.replace(/\D/g, ''),
-                shippingAddress: checkoutData.address ?
-                    `${checkoutData.address.street}, ${checkoutData.address.number}${checkoutData.address.complement ? ', ' + checkoutData.address.complement : ''}, ${checkoutData.address.neighborhood}, ${checkoutData.address.city} - ${checkoutData.address.state}, ${checkoutData.address.zipCode}` : '',
+                shippingAddress: checkoutData.shippingMethod === 'LOCAL_PICKUP' ?
+                    'RETIRADA LOCAL' :
+                    (checkoutData.address ?
+                        `${checkoutData.address.street}, ${checkoutData.address.number}${checkoutData.address.complement ? ', ' + checkoutData.address.complement : ''}, ${checkoutData.address.neighborhood}, ${checkoutData.address.city} - ${checkoutData.address.state}, ${checkoutData.address.zipCode}` : ''),
+                shippingMethod: checkoutData.shippingMethod || 'STANDARD',
+                shippingCost: checkoutData.shippingCost || 0,
                 items: {
-                    create: items.map((item) => ({
-                        productId: item.productId,
-                        quantity: item.quantity,
-                        price: item.price
-                    }))
+                    create: items.map((item) => {
+                        const itemData = {
+                            productId: item.productId,
+                            quantity: item.quantity,
+                            price: item.price,
+                            productVariantId: item.productVariantId || null,
+                            size: item.size || null
+                        };
+                        console.log('🔍 DEBUG MERCADOPAGO - Criando item:', JSON.stringify(itemData, null, 2));
+                        return itemData;
+                    })
                 }
             },
             include: {
@@ -788,9 +889,34 @@ const processCheckoutPix = (req, res) => __awaiter(void 0, void 0, void 0, funct
             }
         });
         console.log('✅ Pedido criado:', order.id);
+        // ✅ INCREMENTAR CONTADOR DE USO DO CUPOM SE APLICÁVEL
+        if (checkoutData.couponId && discountAmount > 0) {
+            try {
+                yield prisma_1.default.coupon.update({
+                    where: { id: checkoutData.couponId },
+                    data: {
+                        usedCount: {
+                            increment: 1
+                        }
+                    }
+                });
+                console.log(`🎟️ Contador de uso do cupom ${checkoutData.couponCode} incrementado`);
+            }
+            catch (couponError) {
+                console.error(`❌ Erro ao incrementar uso do cupom:`, couponError);
+                // Não falhamos o pedido por erro no cupom, apenas logamos
+            }
+        }
         // ✅ 2️⃣ DEPOIS: PROCESSAR PIX
         const [firstName, ...lastNameParts] = (((_a = order.user) === null || _a === void 0 ? void 0 : _a.name) || '').split(' ');
         const lastName = lastNameParts.join(' ') || '';
+        console.log('💳 Enviando para Mercado Pago:', {
+            orderId: order.id,
+            transaction_amount: Number(order.total),
+            subtotal: order.subtotal,
+            discountAmount: order.discountAmount,
+            hasCoupon: !!order.couponId
+        });
         const payment = yield mercadopago_service_1.default.createPixPayment({
             transaction_amount: Number(order.total),
             description: `Pedido #${order.id} - Kimono Store (PIX)`,
@@ -807,14 +933,43 @@ const processCheckoutPix = (req, res) => __awaiter(void 0, void 0, void 0, funct
             external_reference: String(order.id),
             notification_url: `${process.env.API_URL || 'http://localhost:4000'}/api/mercadopago/webhook`
         });
-        // ✅ 3️⃣ ATUALIZAR PEDIDO COM ID DO PAGAMENTO
+        // ✅ 3️⃣ ATUALIZAR PEDIDO COM ID DO PAGAMENTO E STATUS CORRETO
+        const orderStatus = mercadopago_service_1.default.mapMercadoPagoStatusToOrderStatus(payment.status);
         yield prisma_1.default.order.update({
             where: { id: order.id },
             data: {
                 paymentId: String(payment.id),
+                status: orderStatus,
                 updatedAt: new Date()
             }
         });
+        console.log('✅ Pedido atualizado com status:', {
+            orderId: order.id,
+            paymentId: payment.id,
+            mpStatus: payment.status,
+            orderStatus
+        });
+        // ✅ SE PAGAMENTO FOI APROVADO IMEDIATAMENTE, REDUZIR ESTOQUE
+        if (orderStatus === 'PAID') {
+            console.log('🎉 Pagamento PIX aprovado imediatamente - reduzindo estoque:', order.id);
+            try {
+                yield (0, orders_controller_1.reduceStockOnPaymentApproved)(order.id);
+                console.log(`📦 Estoque reduzido automaticamente para o pedido ${order.id}`);
+            }
+            catch (stockError) {
+                console.error(`❌ Erro ao reduzir estoque do pedido ${order.id}:`, stockError);
+            }
+            // ✅ ATUALIZAR USO DO CUPOM
+            if (order.couponId) {
+                try {
+                    yield (0, orders_controller_1.updateCouponUsage)(order.id);
+                    console.log(`🎟️ Uso do cupom registrado para o pedido ${order.id}`);
+                }
+                catch (couponError) {
+                    console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${order.id}:`, couponError);
+                }
+            }
+        }
         // ✅ VERIFICAR STATUS DO PIX (PIX normalmente inicia como 'pending')
         const isValidPix = payment.status === 'pending' || payment.status === 'approved';
         if (isValidPix) {
@@ -871,6 +1026,7 @@ const processCheckoutCard = (req, res) => __awaiter(void 0, void 0, void 0, func
             });
         }
         console.log('💳 Processando cartão direto do checkout...');
+        console.log('📋 Dados recebidos:', JSON.stringify(req.body, null, 2));
         // Validar dados de entrada do checkout
         const { orderData, cardData } = req.body;
         if (!orderData || !orderData.items || !cardData) {
@@ -920,24 +1076,50 @@ const processCheckoutCard = (req, res) => __awaiter(void 0, void 0, void 0, func
         // ✅ 1️⃣ PRIMEIRO: CRIAR O PEDIDO
         const productsTotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
         const orderTotal = orderData.total || productsTotal;
+        // Calcular subtotal (produtos + frete) e desconto
+        const subtotal = productsTotal + (orderData.shippingCost || 0);
+        const discountAmount = orderData.couponCode ? (subtotal - orderTotal) : 0;
+        console.log('💰 Cálculo de valores (Cartão):', {
+            productsTotal,
+            shippingCost: orderData.shippingCost || 0,
+            subtotal,
+            discountAmount,
+            finalTotal: orderTotal,
+            hasCoupon: !!orderData.couponCode,
+            couponId: orderData.couponId,
+            couponCode: orderData.couponCode
+        });
         const order = yield prisma_1.default.order.create({
             data: {
                 userId: req.user.id,
-                total: orderTotal,
+                total: orderTotal, // ✅ USAR TOTAL QUE INCLUI FRETE E DESCONTO
+                subtotal: subtotal, // ✅ VALOR ANTES DO DESCONTO
+                discountAmount: discountAmount > 0 ? discountAmount : null, // ✅ VALOR DO DESCONTO
+                couponId: orderData.couponId || null, // ✅ ID DO CUPOM (se aplicável)
                 status: 'PENDING',
                 paymentMethod: orderData.paymentMethod || 'CREDIT_CARD',
                 customerEmail: orderData.email,
                 customerName: req.user.name || address.name || '',
                 customerPhone: address.phone || '',
                 customerDocument: cpfCnpj.replace(/\D/g, ''),
-                shippingAddress: address ?
-                    `${address.street}, ${address.number}${address.complement ? ', ' + address.complement : ''}, ${address.neighborhood}, ${address.city} - ${address.state}, ${address.zipCode}` : '',
+                shippingAddress: orderData.shippingMethod === 'LOCAL_PICKUP' ?
+                    'RETIRADA LOCAL' :
+                    (address ?
+                        `${address.street}, ${address.number}${address.complement ? ', ' + address.complement : ''}, ${address.neighborhood}, ${address.city} - ${address.state}, ${address.zipCode}` : ''),
+                shippingMethod: orderData.shippingMethod || 'STANDARD',
+                shippingCost: orderData.shippingCost || 0,
                 items: {
-                    create: items.map((item) => ({
-                        productId: item.productId,
-                        quantity: item.quantity,
-                        price: item.price
-                    }))
+                    create: items.map((item) => {
+                        const itemData = {
+                            productId: item.productId,
+                            quantity: item.quantity,
+                            price: item.price,
+                            productVariantId: item.productVariantId || null,
+                            size: item.size || null
+                        };
+                        console.log('🔍 DEBUG MERCADOPAGO - Criando item:', JSON.stringify(itemData, null, 2));
+                        return itemData;
+                    })
                 }
             },
             include: {
@@ -950,6 +1132,24 @@ const processCheckoutCard = (req, res) => __awaiter(void 0, void 0, void 0, func
             }
         });
         console.log('✅ Pedido criado:', order.id);
+        // ✅ INCREMENTAR CONTADOR DE USO DO CUPOM SE APLICÁVEL
+        if (orderData.couponId && discountAmount > 0) {
+            try {
+                yield prisma_1.default.coupon.update({
+                    where: { id: orderData.couponId },
+                    data: {
+                        usedCount: {
+                            increment: 1
+                        }
+                    }
+                });
+                console.log(`🎟️ Contador de uso do cupom ${orderData.couponCode} incrementado`);
+            }
+            catch (couponError) {
+                console.error(`❌ Erro ao incrementar uso do cupom:`, couponError);
+                // Não falhamos o pedido por erro no cupom, apenas logamos
+            }
+        }
         // ✅ 2️⃣ DEPOIS: PROCESSAR CARTÃO
         console.log('💳 Dados do cartão para tokenização:', {
             cardNumberLength: cleanCardNumber.length,
@@ -975,6 +1175,13 @@ const processCheckoutCard = (req, res) => __awaiter(void 0, void 0, void 0, func
         });
         const [firstName, ...lastNameParts] = (address.name || cardData.holderName).split(' ');
         const lastName = lastNameParts.join(' ') || '';
+        console.log('💳 Enviando para Mercado Pago (Cartão):', {
+            orderId: order.id,
+            transaction_amount: Number(order.total),
+            subtotal: order.subtotal,
+            discountAmount: order.discountAmount,
+            hasCoupon: !!order.couponId
+        });
         const payment = yield mercadopago_service_1.default.createPayment({
             transaction_amount: Number(order.total),
             token: cardToken,
@@ -1039,6 +1246,13 @@ const processCheckoutCard = (req, res) => __awaiter(void 0, void 0, void 0, func
             catch (stockError) {
                 console.error(`❌ Erro ao reduzir estoque do pedido ${order.id}:`, stockError);
                 // Não falhar o pagamento por causa do estoque
+            }
+            // ✅ ATUALIZAR USO DO CUPOM
+            try {
+                yield (0, orders_controller_1.updateCouponUsage)(order.id);
+            }
+            catch (couponError) {
+                console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${order.id}:`, couponError);
             }
             return res.status(201).json({
                 success: true,
@@ -1133,7 +1347,7 @@ const processCheckoutCard = (req, res) => __awaiter(void 0, void 0, void 0, func
 exports.processCheckoutCard = processCheckoutCard;
 // ✅ NOVO ENDPOINT: PROCESSAR BOLETO DIRETO DO CHECKOUT
 const processCheckoutBoleto = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b;
+    var _a, _b, _c, _d;
     try {
         if (!req.user) {
             return res.status(401).json({
@@ -1142,6 +1356,7 @@ const processCheckoutBoleto = (req, res) => __awaiter(void 0, void 0, void 0, fu
             });
         }
         console.log('🏦 Processando boleto direto do checkout...');
+        console.log('📋 Dados recebidos:', JSON.stringify(req.body, null, 2));
         // Validar dados de entrada do checkout
         const checkoutData = req.body.orderData;
         if (!checkoutData || !checkoutData.items || !checkoutData.cpfCnpj) {
@@ -1151,7 +1366,8 @@ const processCheckoutBoleto = (req, res) => __awaiter(void 0, void 0, void 0, fu
                 code: 'VALIDATION_ERROR'
             });
         }
-        const { items, cpfCnpj } = checkoutData;
+        const { items, cpfCnpj, address } = checkoutData;
+        console.log('🔍 DEBUG MERCADOPAGO - Itens recebidos:', JSON.stringify(items, null, 2));
         // ✅ VALIDAR CPF/CNPJ
         if (!(0, validation_1.validateDocument)(cpfCnpj)) {
             return res.status(400).json({
@@ -1159,27 +1375,60 @@ const processCheckoutBoleto = (req, res) => __awaiter(void 0, void 0, void 0, fu
                 code: 'INVALID_DOCUMENT'
             });
         }
+        // ✅ VALIDAR ENDEREÇO PARA BOLETO
+        if (!address || !address.street || !address.number || !address.zipCode ||
+            !address.neighborhood || !address.city || !address.state) {
+            return res.status(400).json({
+                error: 'Endereço incompleto para geração de boleto',
+                details: 'Endereço completo é obrigatório para pagamento com boleto',
+                code: 'INVALID_ADDRESS'
+            });
+        }
         // ✅ 1️⃣ PRIMEIRO: CRIAR O PEDIDO
         const productsTotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
         const orderTotal = checkoutData.total || productsTotal;
+        // Calcular subtotal (produtos + frete) e desconto
+        const subtotal = productsTotal + (checkoutData.shippingCost || 0);
+        const discountAmount = checkoutData.couponCode ? (subtotal - orderTotal) : 0;
+        console.log('💰 Cálculo de valores (Boleto):', {
+            productsTotal,
+            shippingCost: checkoutData.shippingCost || 0,
+            subtotal,
+            discountAmount,
+            finalTotal: orderTotal,
+            hasCoupon: !!checkoutData.couponCode
+        });
         const order = yield prisma_1.default.order.create({
             data: {
                 userId: req.user.id,
-                total: orderTotal,
+                total: orderTotal, // ✅ USAR TOTAL QUE INCLUI FRETE E DESCONTO
+                subtotal: subtotal, // ✅ VALOR ANTES DO DESCONTO
+                discountAmount: discountAmount > 0 ? discountAmount : null, // ✅ VALOR DO DESCONTO
+                couponId: checkoutData.couponId || null, // ✅ ID DO CUPOM (se aplicável)
                 status: 'PENDING',
                 paymentMethod: 'BOLETO',
                 customerEmail: checkoutData.email,
                 customerName: req.user.name || '',
                 customerPhone: checkoutData.phone || '',
                 customerDocument: cpfCnpj.replace(/\D/g, ''),
-                shippingAddress: checkoutData.address ?
-                    `${checkoutData.address.street}, ${checkoutData.address.number}${checkoutData.address.complement ? ', ' + checkoutData.address.complement : ''}, ${checkoutData.address.neighborhood}, ${checkoutData.address.city} - ${checkoutData.address.state}, ${checkoutData.address.zipCode}` : '',
+                shippingAddress: checkoutData.shippingMethod === 'LOCAL_PICKUP' ?
+                    'RETIRADA LOCAL' :
+                    (checkoutData.address ?
+                        `${checkoutData.address.street}, ${checkoutData.address.number}${checkoutData.address.complement ? ', ' + checkoutData.address.complement : ''}, ${checkoutData.address.neighborhood}, ${checkoutData.address.city} - ${checkoutData.address.state}, ${checkoutData.address.zipCode}` : ''),
+                shippingMethod: checkoutData.shippingMethod || 'STANDARD',
+                shippingCost: checkoutData.shippingCost || 0,
                 items: {
-                    create: items.map((item) => ({
-                        productId: item.productId,
-                        quantity: item.quantity,
-                        price: item.price
-                    }))
+                    create: items.map((item) => {
+                        const itemData = {
+                            productId: item.productId,
+                            quantity: item.quantity,
+                            price: item.price,
+                            productVariantId: item.productVariantId || null,
+                            size: item.size || null
+                        };
+                        console.log('🔍 DEBUG MERCADOPAGO - Criando item:', JSON.stringify(itemData, null, 2));
+                        return itemData;
+                    })
                 }
             },
             include: {
@@ -1193,33 +1442,101 @@ const processCheckoutBoleto = (req, res) => __awaiter(void 0, void 0, void 0, fu
         });
         console.log('✅ Pedido criado:', order.id);
         // ✅ 2️⃣ DEPOIS: PROCESSAR BOLETO
-        const [firstName, ...lastNameParts] = (((_a = order.user) === null || _a === void 0 ? void 0 : _a.name) || '').split(' ');
-        const lastName = lastNameParts.join(' ') || '';
+        const userName = ((_a = order.user) === null || _a === void 0 ? void 0 : _a.name) || order.customerName || 'Cliente';
+        const [firstName, ...lastNameParts] = userName.split(' ');
+        const lastName = lastNameParts.join(' ') || 'Sobrenome'; // Garantir que sempre tenha um sobrenome
+        console.log('👤 Dados do pagador para boleto:', {
+            name: userName,
+            firstName,
+            lastName,
+            email: ((_b = order.user) === null || _b === void 0 ? void 0 : _b.email) || '',
+            cpfCnpj: cpfCnpj,
+            address: address ? {
+                zipCode: address.zipCode,
+                street: address.street,
+                number: address.number
+            } : 'Sem endereço'
+        });
+        console.log('💳 Enviando para Mercado Pago (Boleto):', {
+            orderId: order.id,
+            transaction_amount: Number(order.total),
+            subtotal: order.subtotal,
+            discountAmount: order.discountAmount,
+            hasCoupon: !!order.couponId
+        });
         const payment = yield mercadopago_service_1.default.createPayment({
             transaction_amount: Number(order.total),
             description: `Pedido #${order.id} - Kimono Store (Boleto)`,
             payment_method_id: 'bolbradesco',
             payer: {
-                email: ((_b = order.user) === null || _b === void 0 ? void 0 : _b.email) || '',
+                email: ((_c = order.user) === null || _c === void 0 ? void 0 : _c.email) || '',
                 first_name: firstName,
                 last_name: lastName,
                 identification: {
                     type: cpfCnpj.length === 11 ? 'CPF' : 'CNPJ',
                     number: cpfCnpj.replace(/\D/g, '')
                 },
+                // Adicionar endereço completo para boleto
+                address: {
+                    zip_code: address.zipCode.replace(/\D/g, ''),
+                    street_name: address.street,
+                    street_number: address.number,
+                    neighborhood: address.neighborhood,
+                    city: address.city,
+                    federal_unit: address.state
+                }
+            },
+            additional_info: {
+                payer: {
+                    first_name: firstName,
+                    last_name: lastName,
+                    address: {
+                        zip_code: address.zipCode.replace(/\D/g, ''),
+                        street_name: address.street,
+                        street_number: address.number
+                    }
+                }
             },
             external_reference: String(order.id),
             notification_url: `${process.env.API_URL || 'http://localhost:4000'}/api/mercadopago/webhook`
         });
-        // ✅ 3️⃣ ATUALIZAR PEDIDO COM ID DO PAGAMENTO
+        // ✅ 3️⃣ ATUALIZAR PEDIDO COM ID DO PAGAMENTO E STATUS CORRETO
+        const orderStatus = mercadopago_service_1.default.mapMercadoPagoStatusToOrderStatus(payment.status);
         yield prisma_1.default.order.update({
             where: { id: order.id },
             data: {
                 paymentId: String(payment.id),
-                status: mercadopago_service_1.default.mapMercadoPagoStatusToOrderStatus(payment.status),
+                status: orderStatus,
                 updatedAt: new Date()
             }
         });
+        console.log('✅ Pedido atualizado com status:', {
+            orderId: order.id,
+            paymentId: payment.id,
+            mpStatus: payment.status,
+            orderStatus
+        });
+        // ✅ SE PAGAMENTO FOI APROVADO IMEDIATAMENTE, REDUZIR ESTOQUE
+        if (orderStatus === 'PAID') {
+            console.log('🎉 Pagamento de boleto aprovado imediatamente - reduzindo estoque:', order.id);
+            try {
+                yield (0, orders_controller_1.reduceStockOnPaymentApproved)(order.id);
+                console.log(`📦 Estoque reduzido automaticamente para o pedido ${order.id}`);
+            }
+            catch (stockError) {
+                console.error(`❌ Erro ao reduzir estoque do pedido ${order.id}:`, stockError);
+            }
+            // ✅ ATUALIZAR USO DO CUPOM
+            if (order.couponId) {
+                try {
+                    yield (0, orders_controller_1.updateCouponUsage)(order.id);
+                    console.log(`🎟️ Uso do cupom registrado para o pedido ${order.id}`);
+                }
+                catch (couponError) {
+                    console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${order.id}:`, couponError);
+                }
+            }
+        }
         // ✅ VERIFICAR STATUS DO BOLETO (Boleto normalmente inicia como 'pending')
         const isValidBoleto = payment.status === 'pending' || payment.status === 'approved';
         if (isValidBoleto) {
@@ -1233,7 +1550,10 @@ const processCheckoutBoleto = (req, res) => __awaiter(void 0, void 0, void 0, fu
                 message: 'Boleto gerado com sucesso',
                 orderId: order.id,
                 paymentId: payment.id,
-                status: payment.status
+                status: payment.status,
+                boleto_url: ((_d = payment.transaction_details) === null || _d === void 0 ? void 0 : _d.external_resource_url) || null,
+                transaction_details: payment.transaction_details || null,
+                payment_method_id: payment.payment_method_id
             });
         }
         else {

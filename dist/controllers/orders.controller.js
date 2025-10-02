@@ -12,7 +12,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.reduceStockOnPaymentApproved = exports.testReduceStock = exports.getStockInfo = exports.checkGuestOrderPaymentStatus = exports.createGuestOrder = exports.getGuestOrderById = exports.addShipmentUpdate = exports.updateTrackingInfo = exports.getOrderTracking = exports.adminUpdateOrderStatus = exports.updateOrderStatus = exports.cancelExpiredOrders = exports.createOrder = exports.getOrderById = exports.getUserOrders = exports.getAllOrders = void 0;
+exports.updateCouponUsage = exports.reduceStockOnPaymentApproved = exports.getStockInfo = exports.checkGuestOrderPaymentStatus = exports.createGuestOrder = exports.getGuestOrderById = exports.addShipmentUpdate = exports.updateTrackingInfo = exports.getOrderTracking = exports.adminUpdateOrderStatus = exports.updateOrderStatus = exports.cancelExpiredOrders = exports.createOrder = exports.getOrderById = exports.getUserOrders = exports.getAllOrders = void 0;
 const client_1 = require("@prisma/client");
 const zod_1 = require("zod");
 const mercadopago_service_1 = __importDefault(require("../services/mercadopago.service"));
@@ -23,6 +23,8 @@ const orderItemSchema = zod_1.z.object({
     productId: zod_1.z.number().int().positive(),
     quantity: zod_1.z.number().int().positive(),
     price: zod_1.z.number().positive(),
+    productVariantId: zod_1.z.number().int().positive().optional(),
+    size: zod_1.z.string().optional(),
 });
 // Schema de validação para criação de pedido
 const orderCreateSchema = zod_1.z.object({
@@ -30,12 +32,12 @@ const orderCreateSchema = zod_1.z.object({
 });
 // Schema de validação para atualização de status do pedido
 const orderUpdateSchema = zod_1.z.object({
-    status: zod_1.z.enum(['PENDING', 'PAID', 'SHIPPED', 'DELIVERED', 'CANCELED']),
+    status: zod_1.z.enum(['PENDING', 'PAID', 'PROCESSING', 'SHIPPED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELED']),
 });
 // Schema para atualização administrativa de status (apenas status)
 const adminOrderUpdateSchema = zod_1.z.object({
     orderId: zod_1.z.number().int().positive(),
-    status: zod_1.z.enum(['PENDING', 'PAID', 'SHIPPED', 'DELIVERED', 'CANCELED']),
+    status: zod_1.z.enum(['PENDING', 'PAID', 'PROCESSING', 'SHIPPED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELED']),
 });
 // Schema for shipment update
 const shipmentUpdateSchema = zod_1.z.object({
@@ -60,17 +62,33 @@ const guestOrderCreateSchema = zod_1.z.object({
     customerPhone: zod_1.z.string().optional(),
     shippingAddress: zod_1.z.object({
         name: zod_1.z.string(),
-        street: zod_1.z.string(),
-        number: zod_1.z.string(),
+        street: zod_1.z.string().optional(),
+        number: zod_1.z.string().optional(),
         complement: zod_1.z.string().optional(),
-        neighborhood: zod_1.z.string(),
-        city: zod_1.z.string(),
-        state: zod_1.z.string(),
-        zipCode: zod_1.z.string(),
+        neighborhood: zod_1.z.string().optional(),
+        city: zod_1.z.string().optional(),
+        state: zod_1.z.string().optional(),
+        zipCode: zod_1.z.string().optional(),
         cpfCnpj: zod_1.z.string().optional()
     }),
     paymentMethod: zod_1.z.enum(['PIX', 'BOLETO', 'CREDIT_CARD', 'DEBIT_CARD']),
+    shippingMethod: zod_1.z.enum(['STANDARD', 'EXPRESS', 'LOCAL_PICKUP']).optional().default('STANDARD'),
+    shippingCost: zod_1.z.number().min(0).optional().default(0),
     total: zod_1.z.number().optional()
+}).refine((data) => {
+    // Se não for retirada local, endereço é obrigatório
+    if (data.shippingMethod !== 'LOCAL_PICKUP') {
+        return data.shippingAddress.street &&
+            data.shippingAddress.number &&
+            data.shippingAddress.neighborhood &&
+            data.shippingAddress.city &&
+            data.shippingAddress.state &&
+            data.shippingAddress.zipCode;
+    }
+    return true;
+}, {
+    message: "Endereço completo é obrigatório para entrega",
+    path: ["shippingAddress"]
 });
 // Obter todos os pedidos (admin)
 const getAllOrders = (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -84,7 +102,26 @@ const getAllOrders = (_req, res) => __awaiter(void 0, void 0, void 0, function* 
                         email: true,
                     },
                 },
-                items: true,
+                items: {
+                    include: {
+                        product: {
+                            select: {
+                                id: true,
+                                name: true,
+                                imageUrl: true,
+                                description: true,
+                            },
+                        },
+                        productVariant: {
+                            select: {
+                                id: true,
+                                size: true,
+                                sku: true,
+                                price: true,
+                            },
+                        },
+                    },
+                },
             },
             orderBy: {
                 createdAt: 'desc',
@@ -108,7 +145,26 @@ const getUserOrders = (req, res) => __awaiter(void 0, void 0, void 0, function* 
         const orders = yield prisma.order.findMany({
             where: { userId },
             include: {
-                items: true,
+                items: {
+                    include: {
+                        product: {
+                            select: {
+                                id: true,
+                                name: true,
+                                imageUrl: true,
+                                description: true,
+                            },
+                        },
+                        productVariant: {
+                            select: {
+                                id: true,
+                                size: true,
+                                sku: true,
+                                price: true,
+                            },
+                        },
+                    },
+                },
             },
             orderBy: {
                 createdAt: 'desc',
@@ -143,7 +199,26 @@ const getOrderById = (req, res) => __awaiter(void 0, void 0, void 0, function* (
                         email: true,
                     },
                 },
-                items: true,
+                items: {
+                    include: {
+                        product: {
+                            select: {
+                                id: true,
+                                name: true,
+                                imageUrl: true,
+                                description: true,
+                            },
+                        },
+                        productVariant: {
+                            select: {
+                                id: true,
+                                size: true,
+                                sku: true,
+                                price: true,
+                            },
+                        },
+                    },
+                },
             },
         });
         if (!order) {
@@ -168,14 +243,17 @@ const createOrder = (req, res) => __awaiter(void 0, void 0, void 0, function* ()
             return res.status(401).json({ error: 'Usuário não autenticado' });
         }
         const userId = req.user.id;
+        console.log('🔍 DEBUG BACKEND - Dados recebidos:', JSON.stringify(req.body, null, 2));
         const validation = orderCreateSchema.safeParse(req.body);
         if (!validation.success) {
+            console.log('❌ DEBUG BACKEND - Validação falhou:', validation.error.format());
             return res.status(400).json({
                 error: 'Dados inválidos',
                 details: validation.error.format()
             });
         }
         const { items } = validation.data;
+        console.log('✅ DEBUG BACKEND - Itens validados:', JSON.stringify(items, null, 2));
         // Verificar disponibilidade dos produtos
         const productIds = items.map(item => item.productId);
         const products = yield prisma.product.findMany({
@@ -219,15 +297,40 @@ const createOrder = (req, res) => __awaiter(void 0, void 0, void 0, function* ()
                     total,
                     status: 'PENDING',
                     items: {
-                        create: items.map(item => ({
-                            productId: item.productId,
-                            quantity: item.quantity,
-                            price: item.price,
-                        })),
+                        create: items.map(item => {
+                            const itemData = {
+                                productId: item.productId,
+                                quantity: item.quantity,
+                                price: item.price,
+                                productVariantId: item.productVariantId || null,
+                                size: item.size || null,
+                            };
+                            console.log('🔍 DEBUG BACKEND - Criando item:', JSON.stringify(itemData, null, 2));
+                            return itemData;
+                        }),
                     },
                 },
                 include: {
-                    items: true,
+                    items: {
+                        include: {
+                            product: {
+                                select: {
+                                    id: true,
+                                    name: true,
+                                    imageUrl: true,
+                                    description: true,
+                                },
+                            },
+                            productVariant: {
+                                select: {
+                                    id: true,
+                                    size: true,
+                                    sku: true,
+                                    price: true,
+                                },
+                            },
+                        },
+                    },
                 },
             });
             // Atualizar estoque dos produtos
@@ -619,7 +722,26 @@ const updateOrderStatus = (req, res) => __awaiter(void 0, void 0, void 0, functi
             where: { id: orderId },
             data: { status },
             include: {
-                items: true,
+                items: {
+                    include: {
+                        product: {
+                            select: {
+                                id: true,
+                                name: true,
+                                imageUrl: true,
+                                description: true,
+                            },
+                        },
+                        productVariant: {
+                            select: {
+                                id: true,
+                                size: true,
+                                sku: true,
+                                price: true,
+                            },
+                        },
+                    },
+                },
             },
         });
         // ✅ RESTAURAR ESTOQUE SE NECESSÁRIO (após atualizar status)
@@ -641,6 +763,21 @@ const updateOrderStatus = (req, res) => __awaiter(void 0, void 0, void 0, functi
                     total: updatedOrder.total,
                     paymentMethod: updatedOrder.paymentMethod || 'Não informado'
                 });
+                // ✅ REDUZIR ESTOQUE QUANDO PEDIDO É MARCADO COMO PAID
+                try {
+                    yield reduceStockOnPaymentApproved(updatedOrder.id);
+                    console.log(`📦 Estoque reduzido automaticamente para pedido ${updatedOrder.id}`);
+                }
+                catch (stockError) {
+                    console.error(`❌ Erro ao reduzir estoque do pedido ${updatedOrder.id}:`, stockError);
+                }
+                // ✅ ATUALIZAR USO DO CUPOM (quando admin marca como pago)
+                try {
+                    yield updateCouponUsage(updatedOrder.id);
+                }
+                catch (couponError) {
+                    console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${updatedOrder.id}:`, couponError);
+                }
             }
         }
         catch (error) {
@@ -695,7 +832,26 @@ const adminUpdateOrderStatus = (req, res) => __awaiter(void 0, void 0, void 0, f
                         email: true,
                     },
                 },
-                items: true,
+                items: {
+                    include: {
+                        product: {
+                            select: {
+                                id: true,
+                                name: true,
+                                imageUrl: true,
+                                description: true,
+                            },
+                        },
+                        productVariant: {
+                            select: {
+                                id: true,
+                                size: true,
+                                sku: true,
+                                price: true,
+                            },
+                        },
+                    },
+                },
             },
         });
         // ✅ RESTAURAR ESTOQUE SE NECESSÁRIO (após atualizar status)
@@ -717,6 +873,13 @@ const adminUpdateOrderStatus = (req, res) => __awaiter(void 0, void 0, void 0, f
                     total: updatedOrder.total,
                     paymentMethod: updatedOrder.paymentMethod || 'Não informado'
                 });
+                // ✅ ATUALIZAR USO DO CUPOM (quando admin marca como pago)
+                try {
+                    yield updateCouponUsage(updatedOrder.id);
+                }
+                catch (couponError) {
+                    console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${updatedOrder.id}:`, couponError);
+                }
             }
         }
         catch (error) {
@@ -756,6 +919,15 @@ const getOrderTracking = (req, res) => __awaiter(void 0, void 0, void 0, functio
                                 id: true,
                                 name: true,
                                 imageUrl: true,
+                                description: true,
+                            },
+                        },
+                        productVariant: {
+                            select: {
+                                id: true,
+                                size: true,
+                                sku: true,
+                                price: true,
                             },
                         },
                     },
@@ -802,14 +974,16 @@ const getOrderTracking = (req, res) => __awaiter(void 0, void 0, void 0, functio
                 progressPercentage = 0;
                 break;
         }
+        // ✅ INFORMAÇÕES DIFERENTES PARA RETIRADA LOCAL
+        const isLocalPickup = order.shippingMethod === 'LOCAL_PICKUP';
         return res.json({
             order,
             trackingInfo: {
-                trackingNumber: order.trackingNumber || 'Não disponível',
-                shippingCarrier: order.shippingCarrier || 'Não disponível',
-                estimatedDelivery: estimatedDeliveryText,
-                departureDate: order.departureDate ? new Date(order.departureDate).toLocaleDateString('pt-BR') : 'Não disponível',
-                currentLocation: order.currentLocation || 'Não disponível',
+                trackingNumber: isLocalPickup ? 'Retirada Local' : (order.trackingNumber || 'Não disponível'),
+                shippingCarrier: isLocalPickup ? 'Retirada na Loja' : (order.shippingCarrier || 'Não disponível'),
+                estimatedDelivery: isLocalPickup ? 'Disponível para retirada' : estimatedDeliveryText,
+                departureDate: isLocalPickup ? 'Não se aplica' : (order.departureDate ? new Date(order.departureDate).toLocaleDateString('pt-BR') : 'Não disponível'),
+                currentLocation: isLocalPickup ? 'Aguardando na loja' : (order.currentLocation || 'Não disponível'),
                 status: order.status,
                 progressPercentage,
             },
@@ -967,14 +1141,17 @@ exports.getGuestOrderById = getGuestOrderById;
 // Criar pedido para usuário não autenticado (guest)
 const createGuestOrder = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
+        console.log('🔍 DEBUG BACKEND GUEST - Dados recebidos:', JSON.stringify(req.body, null, 2));
         const validation = guestOrderCreateSchema.safeParse(req.body);
         if (!validation.success) {
+            console.log('❌ DEBUG BACKEND GUEST - Validação falhou:', validation.error.format());
             return res.status(400).json({
                 error: 'Dados inválidos',
                 details: validation.error.format()
             });
         }
-        const { items, customerEmail, customerName, customerPhone, shippingAddress, paymentMethod, total: sentTotal } = validation.data;
+        const { items, customerEmail, customerName, customerPhone, shippingAddress, paymentMethod, shippingMethod, shippingCost, total: sentTotal } = validation.data;
+        console.log('✅ DEBUG BACKEND GUEST - Itens validados:', JSON.stringify(items, null, 2));
         // Verificar disponibilidade dos produtos
         const productIds = items.map(item => item.productId);
         const products = yield prisma.product.findMany({
@@ -1022,13 +1199,23 @@ const createGuestOrder = (req, res) => __awaiter(void 0, void 0, void 0, functio
                     customerName,
                     customerEmail,
                     customerPhone,
-                    shippingAddress: JSON.stringify(shippingAddress),
+                    shippingAddress: shippingMethod === 'LOCAL_PICKUP' ?
+                        'RETIRADA LOCAL' :
+                        JSON.stringify(shippingAddress),
+                    shippingMethod,
+                    shippingCost,
                     items: {
-                        create: items.map(item => ({
-                            productId: item.productId,
-                            quantity: item.quantity,
-                            price: item.price
-                        }))
+                        create: items.map(item => {
+                            const itemData = {
+                                productId: item.productId,
+                                quantity: item.quantity,
+                                price: item.price,
+                                productVariantId: item.productVariantId || null,
+                                size: item.size || null,
+                            };
+                            console.log('🔍 DEBUG BACKEND GUEST - Criando item:', JSON.stringify(itemData, null, 2));
+                            return itemData;
+                        })
                     }
                 },
                 include: {
@@ -1112,6 +1299,13 @@ const checkGuestOrderPaymentStatus = (req, res) => __awaiter(void 0, void 0, voi
                         }
                         catch (stockError) {
                             console.error(`❌ Erro ao reduzir estoque do pedido guest ${order.id}:`, stockError);
+                        }
+                        // ✅ ATUALIZAR USO DO CUPOM
+                        try {
+                            yield updateCouponUsage(order.id);
+                        }
+                        catch (couponError) {
+                            console.error(`❌ Erro ao atualizar uso do cupom para o pedido guest ${order.id}:`, couponError);
                         }
                     }
                     // Retornar dados atualizados
@@ -1330,31 +1524,46 @@ const reduceStockOnPaymentApproved = (orderId) => __awaiter(void 0, void 0, void
     }
 });
 exports.reduceStockOnPaymentApproved = reduceStockOnPaymentApproved;
-/**
- * ✅ ENDPOINT PARA TESTAR REDUÇÃO DE ESTOQUE
- * Endpoint administrativo para testar a redução manual de estoque
- */
-const testReduceStock = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+// ✅ FUNÇÃO PARA ATUALIZAR USO DO CUPOM QUANDO PAGAMENTO É APROVADO
+const updateCouponUsage = (orderId) => __awaiter(void 0, void 0, void 0, function* () {
+    console.log(`🎫 Atualizando uso do cupom para pedido ${orderId}...`);
     try {
-        const { orderId } = req.params;
-        if (!orderId || isNaN(Number(orderId))) {
-            return res.status(400).json({
-                error: 'ID do pedido inválido'
-            });
-        }
-        const result = yield reduceStockOnPaymentApproved(Number(orderId));
-        return res.json({
-            success: true,
-            message: 'Estoque reduzido com sucesso',
-            result
+        // Buscar pedido com cupom
+        const order = yield prisma.order.findUnique({
+            where: { id: orderId },
+            include: { coupon: true }
         });
+        if (!order) {
+            throw new Error(`Pedido ${orderId} não encontrado`);
+        }
+        if (!order.couponId || !order.coupon) {
+            console.log(`ℹ️ Pedido ${orderId} não possui cupom associado`);
+            return;
+        }
+        console.log(`🎫 Atualizando uso do cupom ${order.couponId} (${order.coupon.code}) para o pedido ${orderId}`);
+        const updatedCoupon = yield prisma.coupon.update({
+            where: { id: order.couponId },
+            data: {
+                usedCount: {
+                    increment: 1
+                }
+            }
+        });
+        console.log(`✅ Cupom ${order.couponId} atualizado. Usos: ${updatedCoupon.usedCount}/${updatedCoupon.maxUses || 'ilimitado'}`);
+        // Verificar se o cupom atingiu o limite máximo
+        if (updatedCoupon.maxUses && updatedCoupon.usedCount >= updatedCoupon.maxUses) {
+            console.log(`⚠️ Cupom ${order.couponId} atingiu o limite máximo de usos (${updatedCoupon.maxUses})`);
+            // Desativar o cupom automaticamente
+            yield prisma.coupon.update({
+                where: { id: order.couponId },
+                data: { isActive: false }
+            });
+            console.log(`🔒 Cupom ${order.couponId} desativado automaticamente`);
+        }
     }
     catch (error) {
-        console.error('Erro ao testar redução de estoque:', error);
-        return res.status(500).json({
-            error: 'Erro ao reduzir estoque',
-            message: error.message
-        });
+        console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${orderId}:`, error);
+        throw error;
     }
 });
-exports.testReduceStock = testReduceStock;
+exports.updateCouponUsage = updateCouponUsage;

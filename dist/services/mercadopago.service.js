@@ -55,7 +55,7 @@ class MercadoPagoService {
     // ✅ CRIAR PAGAMENTO USANDO SDK OFICIAL
     createPayment(paymentData) {
         return __awaiter(this, void 0, void 0, function* () {
-            var _a;
+            var _a, _b;
             try {
                 console.log('🔄 Criando pagamento via SDK oficial do Mercado Pago...');
                 console.log('📊 Dados recebidos para criação do pagamento:', {
@@ -74,14 +74,13 @@ class MercadoPagoService {
                     installments: paymentData.installments || 1,
                     payer: {
                         email: paymentData.payer.email,
-                        first_name: paymentData.payer.first_name,
-                        last_name: paymentData.payer.last_name,
+                        first_name: paymentData.payer.first_name || 'Cliente',
+                        last_name: paymentData.payer.last_name || 'Sobrenome',
                         identification: paymentData.payer.identification ? {
                             type: paymentData.payer.identification.type,
                             number: paymentData.payer.identification.number.toString()
                         } : undefined,
                         phone: paymentData.payer.phone,
-                        address: paymentData.payer.address,
                     },
                     external_reference: paymentData.external_reference,
                     notification_url: paymentData.notification_url || `${process.env.API_URL}/api/mercadopago/webhook`,
@@ -90,26 +89,24 @@ class MercadoPagoService {
                     binary_mode: false,
                     capture: true,
                     // ✅ CONFIGURAÇÕES ADICIONAIS PARA MELHOR APROVAÇÃO
-                    statement_descriptor: 'KIMONO STORE',
-                    additional_info: {
-                        items: [{
-                                id: paymentData.external_reference || 'item-001',
-                                title: paymentData.description,
-                                quantity: 1,
-                                unit_price: Number(paymentData.transaction_amount)
-                            }],
-                        payer: {
-                            first_name: paymentData.payer.first_name,
-                            last_name: paymentData.payer.last_name,
-                            phone: paymentData.payer.phone,
-                            address: paymentData.payer.address,
-                            registration_date: new Date().toISOString()
-                        },
-                        shipments: {
-                            receiver_address: paymentData.payer.address
-                        }
-                    }
+                    statement_descriptor: 'KIMONO STORE'
                 };
+                // Se tiver additional_info, incluir na requisição
+                if (paymentData.additional_info) {
+                    console.log('ℹ️ Incluindo additional_info na requisição');
+                    // Garantir que additional_info.payer.address tenha apenas os campos permitidos
+                    if ((_a = paymentData.additional_info.payer) === null || _a === void 0 ? void 0 : _a.address) {
+                        const safeAddress = {
+                            zip_code: paymentData.additional_info.payer.address.zip_code,
+                            street_name: paymentData.additional_info.payer.address.street_name,
+                            street_number: paymentData.additional_info.payer.address.street_number
+                        };
+                        paymentRequest.additional_info = Object.assign(Object.assign({}, paymentData.additional_info), { payer: Object.assign(Object.assign({}, paymentData.additional_info.payer), { address: safeAddress }) });
+                    }
+                    else {
+                        paymentRequest.additional_info = paymentData.additional_info;
+                    }
+                }
                 // ✅ ADICIONAR TOKEN OU PAYMENT_METHOD_ID CONFORME NECESSÁRIO
                 if (paymentData.token) {
                     // Para cartões com token, NÃO incluir payment_method_id
@@ -120,19 +117,43 @@ class MercadoPagoService {
                     // Para outros métodos (PIX, boleto), incluir payment_method_id
                     paymentRequest.payment_method_id = paymentData.payment_method_id;
                     console.log('🏦 Pagamento com payment_method_id:', paymentData.payment_method_id);
+                    // ✅ VERIFICAR SE É BOLETO E ADICIONAR ENDEREÇO DO PAGADOR SE NECESSÁRIO
+                    if (paymentData.payment_method_id === 'bolbradesco') {
+                        console.log('🧾 Verificando dados para boleto bancário...');
+                        // Verificar se temos o endereço completo do pagador para boleto
+                        if (!paymentData.payer.address) {
+                            console.log('⚠️ ALERTA: Pagamento com boleto sem endereço do pagador!');
+                        }
+                        else {
+                            console.log('📋 Dados de endereço para boleto:', paymentData.payer.address);
+                            // Adicionar endereço básico ao payer para boleto
+                            paymentRequest.payer.address = {
+                                zip_code: paymentData.payer.address.zip_code,
+                                street_name: paymentData.payer.address.street_name,
+                                street_number: paymentData.payer.address.street_number,
+                                neighborhood: paymentData.payer.address.neighborhood || "Centro",
+                                city: paymentData.payer.address.city || "São Paulo",
+                                federal_unit: paymentData.payer.address.federal_unit || "SP"
+                            };
+                        }
+                        // Verificar se temos nome e sobrenome para boleto
+                        if (!paymentData.payer.first_name || !paymentData.payer.last_name) {
+                            console.log('⚠️ ALERTA: Pagamento com boleto sem nome ou sobrenome completos!');
+                            console.log('Nome:', paymentData.payer.first_name || 'VAZIO');
+                            console.log('Sobrenome:', paymentData.payer.last_name || 'VAZIO');
+                            // Garantir que sempre tenha um valor
+                            paymentRequest.payer.first_name = paymentData.payer.first_name || 'Cliente';
+                            paymentRequest.payer.last_name = paymentData.payer.last_name || 'Sobrenome';
+                            console.log('✅ Valores corrigidos para boleto:');
+                            console.log('Nome:', paymentRequest.payer.first_name);
+                            console.log('Sobrenome:', paymentRequest.payer.last_name);
+                        }
+                    }
                 }
                 else {
                     throw new Error('Token ou payment_method_id é obrigatório');
                 }
-                console.log('📝 Dados finais que serão enviados ao MP:', {
-                    transaction_amount: paymentRequest.transaction_amount,
-                    hasToken: !!paymentRequest.token,
-                    payment_method_id: paymentRequest.payment_method_id,
-                    installments: paymentRequest.installments,
-                    payer_document: paymentRequest.payer.identification,
-                    binary_mode: paymentRequest.binary_mode,
-                    capture: paymentRequest.capture
-                });
+                console.log('📝 Dados finais que serão enviados ao MP:', JSON.stringify(paymentRequest, null, 2));
                 // ✅ CRIAR PAGAMENTO COM SDK
                 const result = yield this.payment.create({
                     body: paymentRequest,
@@ -146,7 +167,8 @@ class MercadoPagoService {
                     status_detail: result.status_detail,
                     payment_method: result.payment_method_id,
                     payment_type: result.payment_type_id,
-                    transaction_amount: result.transaction_amount
+                    transaction_amount: result.transaction_amount,
+                    transaction_details: result.transaction_details
                 });
                 return result;
             }
@@ -160,14 +182,19 @@ class MercadoPagoService {
                         description: cause.description,
                         status: error.status
                     });
-                    throw new Error(`Erro MP: ${cause.description || cause.code || error.message}`);
+                    // Tratamento específico para erro 7524 (boleto)
+                    if (cause.code === 7524) {
+                        console.error('❌ ERRO 7524: Este erro geralmente ocorre quando faltam informações de endereço necessárias para gerar boleto');
+                        console.error('Dados do pagador:', JSON.stringify(paymentData.payer, null, 2));
+                    }
+                    throw new Error(`Erro MP: ${cause.code}`);
                 }
                 // Log mais detalhado do erro
                 console.error('❌ Erro completo:', {
                     message: error.message,
                     status: error.status,
                     statusText: error.statusText,
-                    response: (_a = error.response) === null || _a === void 0 ? void 0 : _a.data
+                    response: (_b = error.response) === null || _b === void 0 ? void 0 : _b.data
                 });
                 throw new Error(`Erro no pagamento: ${error.message}`);
             }

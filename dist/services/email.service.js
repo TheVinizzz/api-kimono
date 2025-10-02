@@ -20,16 +20,44 @@ class EmailService {
             service: 'gmail',
             auth: {
                 user: process.env.EMAIL_USER || '',
-                pass: process.env.EMAIL_PASS || ''
+                pass: process.env.EMAIL_PASS || process.env.EMAIL_PASSWORD || ''
+            },
+            // Adicionar configurações para melhorar entregabilidade
+            pool: true, // Use connection pooling
+            maxConnections: 5,
+            maxMessages: 100,
+            rateDelta: 1000,
+            rateLimit: 5
+        });
+        // Verificar conexão ao iniciar
+        this.verifyConnection();
+    }
+    // Verificar conexão com o servidor de email
+    verifyConnection() {
+        return __awaiter(this, void 0, void 0, function* () {
+            try {
+                if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+                    console.log('⚠️ Configuração de email incompleta. Emails não serão enviados.');
+                    return;
+                }
+                yield this.transporter.verify();
+                console.log('✅ Conexão com servidor de email estabelecida com sucesso');
+            }
+            catch (error) {
+                console.error('❌ Erro ao conectar com servidor de email:', error);
             }
         });
     }
     sendPaymentConfirmation(orderData) {
         return __awaiter(this, void 0, void 0, function* () {
             try {
+                if (!this.isEmailConfigured()) {
+                    console.log('⚠️ Email não configurado. Pulando envio de confirmação de pagamento.');
+                    return false;
+                }
                 const emailHtml = this.generatePaymentConfirmationEmail(orderData);
                 const mailOptions = {
-                    from: process.env.EMAIL_FROM || 'noreply@seusite.com',
+                    from: process.env.EMAIL_FROM || `"Kimono Store" <${process.env.EMAIL_USER}>`,
                     to: orderData.customerEmail,
                     subject: `Pagamento Confirmado - Pedido #${orderData.orderId}`,
                     html: emailHtml
@@ -47,16 +75,38 @@ class EmailService {
     sendTrackingCodeNotification(trackingData) {
         return __awaiter(this, void 0, void 0, function* () {
             try {
+                if (!this.isEmailConfigured()) {
+                    console.log('⚠️ Email não configurado. Pulando envio de código de rastreio.');
+                    return false;
+                }
                 const emailHtml = this.generateTrackingCodeEmail(trackingData);
                 const mailOptions = {
-                    from: process.env.EMAIL_FROM || 'noreply@seusite.com',
+                    from: process.env.EMAIL_FROM || `"Kimono Store" <${process.env.EMAIL_USER}>`,
                     to: trackingData.customerEmail,
                     subject: `Código de Rastreio Disponível - Pedido #${trackingData.orderId}`,
                     html: emailHtml
                 };
-                yield this.transporter.sendMail(mailOptions);
-                console.log(`✅ Email com código de rastreio enviado para ${trackingData.customerEmail}`);
-                return true;
+                // Tentar enviar com retry em caso de falha
+                let tentativas = 0;
+                const maxTentativas = 3;
+                while (tentativas < maxTentativas) {
+                    tentativas++;
+                    try {
+                        yield this.transporter.sendMail(mailOptions);
+                        console.log(`✅ Email com código de rastreio enviado para ${trackingData.customerEmail}`);
+                        return true;
+                    }
+                    catch (retryError) {
+                        console.error(`❌ Erro na tentativa ${tentativas}/${maxTentativas} de enviar email:`, retryError);
+                        if (tentativas < maxTentativas) {
+                            const tempoEspera = Math.pow(2, tentativas) * 1000; // 2s, 4s, 8s...
+                            console.log(`⏳ Aguardando ${tempoEspera / 1000}s antes da próxima tentativa...`);
+                            yield new Promise(resolve => setTimeout(resolve, tempoEspera));
+                        }
+                    }
+                }
+                console.error('❌ Todas as tentativas de envio de email falharam');
+                return false;
             }
             catch (error) {
                 console.error('❌ Erro ao enviar email de rastreio:', error);
@@ -64,8 +114,39 @@ class EmailService {
             }
         });
     }
+    sendPasswordResetEmail(resetData) {
+        return __awaiter(this, void 0, void 0, function* () {
+            try {
+                if (!this.isEmailConfigured()) {
+                    console.log('⚠️ Email não configurado. Pulando envio de reset de senha.');
+                    return false;
+                }
+                const emailHtml = this.generatePasswordResetEmail(resetData);
+                const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${resetData.resetToken}`;
+                const mailOptions = {
+                    from: process.env.EMAIL_FROM || `"Kimono Store" <${process.env.EMAIL_USER}>`,
+                    to: resetData.userEmail,
+                    subject: 'Redefinir sua senha - Kimono Store',
+                    html: emailHtml.replace('{{RESET_URL}}', resetUrl)
+                };
+                yield this.transporter.sendMail(mailOptions);
+                console.log(`✅ Email de reset de senha enviado para ${resetData.userEmail}`);
+                return true;
+            }
+            catch (error) {
+                console.error('❌ Erro ao enviar email de reset de senha:', error);
+                return false;
+            }
+        });
+    }
+    // Verificar se o email está configurado
+    isEmailConfigured() {
+        return !!(process.env.EMAIL_USER && (process.env.EMAIL_PASS || process.env.EMAIL_PASSWORD));
+    }
     generateTrackingCodeEmail(trackingData) {
-        const rastreioUrl = 'https://rastreamento.correios.com.br/app/index.php';
+        const rastreioUrl = trackingData.shippingCarrier.toLowerCase().includes('correios')
+            ? `https://rastreamento.correios.com.br/app/index.php`
+            : 'https://rastreamento.correios.com.br/app/index.php';
         return `
       <!DOCTYPE html>
       <html>
@@ -113,6 +194,64 @@ class EmailService {
               Dúvidas? Entre em contato conosco:<br>
               📱 WhatsApp: (83) 99831-1713<br>
               📧 Email: suporte@seusite.com
+            </p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+    }
+    generatePasswordResetEmail(resetData) {
+        return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Redefinir Senha</title>
+      </head>
+      <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+          <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="color: #D4AF37; margin: 0;">🔐 Redefinir Senha</h1>
+          </div>
+          
+          <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+            <h2 style="margin: 0 0 10px 0; color: #495057;">Olá, ${resetData.userName}!</h2>
+            <p style="margin: 0;">Recebemos uma solicitação para redefinir a senha da sua conta na Kimono Store.</p>
+          </div>
+
+          <div style="background: #e8f4f8; padding: 20px; border-radius: 8px; margin-bottom: 20px; text-align: center;">
+            <h3 style="margin: 0 0 15px 0; color: #0056b3;">Clique no botão abaixo para redefinir sua senha</h3>
+            <p style="margin: 0 0 20px 0; color: #6c757d;">Este link é válido por 1 hora por motivos de segurança.</p>
+            
+            <a href="{{RESET_URL}}" style="background-color: #D4AF37; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block; font-size: 16px;">
+              REDEFINIR SENHA
+            </a>
+          </div>
+
+          <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #ffc107;">
+            <h4 style="margin: 0 0 10px 0; color: #856404;">⚠️ Importante:</h4>
+            <ul style="margin: 0; padding-left: 20px; color: #856404;">
+              <li>Se você não solicitou esta redefinição, ignore este email</li>
+              <li>Nunca compartilhe este link com outras pessoas</li>
+              <li>O link expira em 1 hora por segurança</li>
+            </ul>
+          </div>
+
+          <div style="background: #d1ecf1; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+            <h4 style="margin: 0 0 10px 0; color: #0c5460;">Dicas para uma senha segura:</h4>
+            <ul style="margin: 0; padding-left: 20px; color: #0c5460;">
+              <li>Use pelo menos 8 caracteres</li>
+              <li>Combine letras maiúsculas, minúsculas, números e símbolos</li>
+              <li>Evite informações pessoais óbvias</li>
+            </ul>
+          </div>
+
+          <div style="text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
+            <p style="color: #6c757d; font-size: 14px;">
+              Dúvidas? Entre em contato conosco:<br>
+              📱 WhatsApp: (83) 99831-1713<br>
+              📧 Email: suporte@kimonostore.com
             </p>
           </div>
         </div>

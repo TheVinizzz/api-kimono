@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const adminController = __importStar(require("../controllers/admin.controller"));
+const authController = __importStar(require("../controllers/auth.controller"));
 const auth_1 = require("../middleware/auth");
 const router = (0, express_1.Router)();
 // Todas as rotas são protegidas por auth e isAdmin
@@ -43,4 +44,5 @@ router.use(auth_1.auth, auth_1.isAdmin);
 router.get('/dashboard', adminController.getDashboardStats);
 // Usuários
 router.get('/users', adminController.getAllUsers);
+router.post('/users/:userId/reset-password', authController.adminResetPassword);
 exports.default = router;

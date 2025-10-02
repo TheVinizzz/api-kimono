@@ -37,6 +37,7 @@ const productSchema = zod_1.z.object({
 const productVariantSchema = zod_1.z.object({
     size: zod_1.z.string().min(1, 'Tamanho é obrigatório'),
     price: zod_1.z.number().positive('Preço deve ser positivo'),
+    originalPrice: zod_1.z.number().min(0, 'Preço original deve ser zero ou positivo').nullable().optional(),
     stock: zod_1.z.number().int().nonnegative('Estoque não pode ser negativo'),
     sku: zod_1.z.string().optional(),
     weight: zod_1.z.number().positive('Peso deve ser positivo').min(0.1, 'Peso mínimo é 0.1kg').optional(),
@@ -54,7 +55,20 @@ const includeRelations = {
     },
     variants: {
         where: { isActive: true },
-        orderBy: { size: 'asc' }
+        orderBy: { size: 'asc' },
+        select: {
+            id: true,
+            productId: true,
+            size: true,
+            price: true,
+            originalPrice: true,
+            stock: true,
+            sku: true,
+            weight: true,
+            isActive: true,
+            createdAt: true,
+            updatedAt: true
+        }
     }
 };
 // Nova função para obter produtos filtrados (atualizada)
@@ -62,7 +76,18 @@ const getFilteredProducts = (req, res) => __awaiter(void 0, void 0, void 0, func
     try {
         const { categoryId, brandId, search, minPrice, maxPrice, discount, sort } = req.query;
         // Construir o where para o Prisma
-        const where = {};
+        const where = {
+            // ✅ FILTRO PRINCIPAL: Excluir produtos excluídos permanentemente
+            name: {
+                not: {
+                    startsWith: "[INDISPONÍVEL]"
+                }
+            },
+            // Excluir o produto de referência "Produto Removido"
+            NOT: {
+                name: "Produto Removido"
+            }
+        };
         // Filtrar por categoria
         if (categoryId && !isNaN(Number(categoryId))) {
             where.categoryId = Number(categoryId);
@@ -162,8 +187,18 @@ const getFilteredProducts = (req, res) => __awaiter(void 0, void 0, void 0, func
                 }
             });
         }
+        // Calcular stock total baseado nas variantes para cada produto
+        const productsWithCalculatedStock = filteredProducts.map(product => {
+            let calculatedStock = product.stock;
+            if (product.variants && product.variants.length > 0) {
+                calculatedStock = product.variants
+                    .filter(variant => variant.isActive)
+                    .reduce((total, variant) => total + (variant.stock || 0), 0);
+            }
+            return Object.assign(Object.assign({}, product), { stock: calculatedStock });
+        });
         // Serializar BigInt antes de enviar resposta
-        const serializedProducts = serializeBigInt(filteredProducts);
+        const serializedProducts = serializeBigInt(productsWithCalculatedStock);
         return res.json(serializedProducts);
     }
     catch (error) {
@@ -176,10 +211,32 @@ exports.getFilteredProducts = getFilteredProducts;
 const getAllProducts = (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const products = yield prisma.product.findMany({
+            where: {
+                // ✅ FILTRO: Excluir produtos excluídos permanentemente
+                name: {
+                    not: {
+                        startsWith: "[INDISPONÍVEL]"
+                    }
+                },
+                // Excluir o produto de referência "Produto Removido"
+                NOT: {
+                    name: "Produto Removido"
+                }
+            },
             include: includeRelations,
         });
+        // Calcular stock total baseado nas variantes para cada produto
+        const productsWithCalculatedStock = products.map(product => {
+            let calculatedStock = product.stock;
+            if (product.variants && product.variants.length > 0) {
+                calculatedStock = product.variants
+                    .filter(variant => variant.isActive)
+                    .reduce((total, variant) => total + (variant.stock || 0), 0);
+            }
+            return Object.assign(Object.assign({}, product), { stock: calculatedStock });
+        });
         // Serializar BigInt antes de enviar resposta
-        const serializedProducts = serializeBigInt(products);
+        const serializedProducts = serializeBigInt(productsWithCalculatedStock);
         return res.json(serializedProducts);
     }
     catch (error) {
@@ -196,15 +253,36 @@ const getProductById = (req, res) => __awaiter(void 0, void 0, void 0, function*
         if (isNaN(productId)) {
             return res.status(400).json({ error: 'ID inválido' });
         }
-        const product = yield prisma.product.findUnique({
-            where: { id: productId },
+        const product = yield prisma.product.findFirst({
+            where: {
+                id: productId,
+                // ✅ FILTRO: Excluir produtos excluídos permanentemente
+                name: {
+                    not: {
+                        startsWith: "[INDISPONÍVEL]"
+                    }
+                },
+                // Excluir o produto de referência "Produto Removido"
+                NOT: {
+                    name: "Produto Removido"
+                }
+            },
             include: includeRelations,
         });
         if (!product) {
             return res.status(404).json({ error: 'Produto não encontrado' });
         }
+        // Calcular stock total baseado nas variantes se o produto tiver variantes
+        let calculatedStock = product.stock;
+        if (product.variants && product.variants.length > 0) {
+            calculatedStock = product.variants
+                .filter(variant => variant.isActive)
+                .reduce((total, variant) => total + (variant.stock || 0), 0);
+        }
+        // Criar objeto com stock calculado
+        const productWithCalculatedStock = Object.assign(Object.assign({}, product), { stock: calculatedStock });
         // Serializar BigInt antes de enviar resposta
-        const serializedProduct = serializeBigInt(product);
+        const serializedProduct = serializeBigInt(productWithCalculatedStock);
         return res.json(serializedProduct);
     }
     catch (error) {
@@ -460,7 +538,7 @@ const createProductVariant = (req, res) => __awaiter(void 0, void 0, void 0, fun
                 details: validation.error.format()
             });
         }
-        const { size, price, stock, sku, isActive } = validation.data;
+        const { size, price, originalPrice, stock, sku, isActive } = validation.data;
         // Verificar se já existe uma variação com o mesmo tamanho
         const existingVariant = yield prisma.productVariant.findUnique({
             where: { productId_size: { productId: productIdNum, size } }
@@ -473,6 +551,7 @@ const createProductVariant = (req, res) => __awaiter(void 0, void 0, void 0, fun
                 productId: productIdNum,
                 size,
                 price,
+                originalPrice: originalPrice || null, // Usar originalPrice ou null se não fornecido
                 stock,
                 sku,
                 isActive

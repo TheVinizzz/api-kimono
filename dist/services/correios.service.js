@@ -213,6 +213,41 @@ class CorreiosService {
         });
     }
     /**
+     * Rastreia múltiplos objetos pelos Correios
+     */
+    rastrearMultiplosObjetos(codigosRastreio) {
+        return __awaiter(this, void 0, void 0, function* () {
+            try {
+                console.log(`🔍 Rastreando ${codigosRastreio.length} objetos...`);
+                const requests = codigosRastreio.map((codigo) => __awaiter(this, void 0, void 0, function* () {
+                    try {
+                        const result = yield this.rastrearObjeto(codigo);
+                        return { codigo, result };
+                    }
+                    catch (error) {
+                        console.error(`❌ Erro ao rastrear código ${codigo}:`, error);
+                        return { codigo, result: null };
+                    }
+                }));
+                const results = yield Promise.all(requests);
+                const tracking = {};
+                results.forEach(({ codigo, result }) => {
+                    tracking[codigo] = result;
+                });
+                return tracking;
+            }
+            catch (error) {
+                console.error('❌ Erro ao rastrear múltiplos objetos:', error.message);
+                // Retornar objeto vazio em caso de erro geral
+                const tracking = {};
+                codigosRastreio.forEach(codigo => {
+                    tracking[codigo] = null;
+                });
+                return tracking;
+            }
+        });
+    }
+    /**
      * Consulta CEP pelos Correios usando a API v2
      */
     consultarCEP(cep) {
@@ -413,37 +448,363 @@ class CorreiosService {
      */
     criarPrepostagemPedido(dadosPedido) {
         return __awaiter(this, void 0, void 0, function* () {
-            const prepostagemData = {
-                remetente: {
-                    nome: correios_1.CORREIOS_CONFIG.remetente.nome,
-                    cnpj: correios_1.CORREIOS_CONFIG.remetente.cnpj,
-                    inscricaoEstadual: correios_1.CORREIOS_CONFIG.remetente.inscricaoEstadual,
-                    endereco: {
-                        logradouro: correios_1.CORREIOS_CONFIG.remetente.endereco.logradouro,
-                        numero: correios_1.CORREIOS_CONFIG.remetente.endereco.numero,
-                        complemento: correios_1.CORREIOS_CONFIG.remetente.endereco.complemento,
-                        bairro: correios_1.CORREIOS_CONFIG.remetente.endereco.bairro,
-                        cidade: correios_1.CORREIOS_CONFIG.remetente.endereco.cidade,
-                        uf: correios_1.CORREIOS_CONFIG.remetente.endereco.uf,
-                        cep: correios_1.CORREIOS_CONFIG.remetente.endereco.cep
-                    },
-                    telefone: correios_1.CORREIOS_CONFIG.remetente.telefone,
-                    email: correios_1.CORREIOS_CONFIG.remetente.email
-                },
-                destinatario: dadosPedido.destinatario,
-                servico: dadosPedido.servico,
-                volumes: [{
-                        altura: 5, // altura padrão em cm para kimono
-                        largura: 25, // largura padrão em cm
-                        comprimento: 30, // comprimento padrão em cm
-                        peso: Math.max(dadosPedido.peso, 300), // peso mínimo 300g
-                        tipoObjeto: 2, // 2 = Pacote
-                        valorDeclarado: dadosPedido.valor && dadosPedido.valor > 50 ? dadosPedido.valor : undefined
-                    }],
-                servicosAdicionais: dadosPedido.valor && dadosPedido.valor > 50 ? ['001'] : undefined, // 001 = Valor declarado
-                observacao: dadosPedido.observacao || `Pedido #${dadosPedido.orderId}`
+            var _a, _b;
+            console.log(`🚀 === INÍCIO DA PREPOSTAGEM - PEDIDO ${dadosPedido.orderId} ===`);
+            // Funções de limpeza e validação
+            const limparTelefone = (telefone) => {
+                if (!telefone)
+                    return '';
+                const cleaned = telefone.replace(/\D/g, '');
+                // Telefone máximo 12 dígitos (com DDD)
+                return cleaned.length > 12 ? cleaned.slice(0, 12) : cleaned;
             };
-            return yield this.criarPrepostagem(prepostagemData);
+            const limparCEP = (cep) => {
+                if (!cep)
+                    return '';
+                const cleaned = cep.replace(/\D/g, '');
+                return cleaned.length === 8 ? cleaned : '';
+            };
+            const limparDocumento = (documento) => {
+                if (!documento)
+                    return '';
+                return documento.replace(/\D/g, '');
+            };
+            // Garantir autenticação válida
+            yield this.authenticate();
+            // Converter peso para gramas (mínimo 300g conforme regras dos Correios)
+            const pesoGramas = Math.max(Math.round(dadosPedido.peso * 1000), 300);
+            console.log(`📋 Dados de entrada:`);
+            console.log(`- Pedido ID: ${dadosPedido.orderId}`);
+            console.log(`- Peso: ${dadosPedido.peso}kg → ${pesoGramas}g`);
+            console.log(`- Serviço: ${dadosPedido.servico}`);
+            console.log(`- Destinatário: ${dadosPedido.destinatario.nome}`);
+            console.log(`- Doc. destinatário: ${dadosPedido.destinatario.documento}`);
+            console.log(`- Tel. destinatário: ${dadosPedido.destinatario.telefone}`);
+            console.log(`- CEP origem → destino: ${correios_1.CORREIOS_CONFIG.remetente.endereco.cep} → ${dadosPedido.destinatario.endereco.cep}`);
+            // Validações críticas
+            const validationErrors = [];
+            // Carregar dados do remetente diretamente das variáveis de ambiente
+            const remetenteData = {
+                nome: process.env.CORREIOS_REMETENTE_NOME || 'KIMONO STORE',
+                cnpj: process.env.CORREIOS_REMETENTE_CNPJ || '',
+                telefone: process.env.CORREIOS_REMETENTE_TELEFONE || '',
+                endereco: {
+                    logradouro: process.env.CORREIOS_REMETENTE_LOGRADOURO || '',
+                    numero: process.env.CORREIOS_REMETENTE_NUMERO || '',
+                    complemento: process.env.CORREIOS_REMETENTE_COMPLEMENTO || '',
+                    bairro: process.env.CORREIOS_REMETENTE_BAIRRO || '',
+                    cidade: process.env.CORREIOS_REMETENTE_CIDADE || '',
+                    uf: process.env.CORREIOS_REMETENTE_UF || '',
+                    cep: process.env.CORREIOS_REMETENTE_CEP || ''
+                }
+            };
+            console.log('🔧 Dados do remetente carregados:');
+            console.log('- Nome:', remetenteData.nome);
+            console.log('- CNPJ:', remetenteData.cnpj);
+            console.log('- Telefone:', remetenteData.telefone);
+            console.log('- Logradouro:', remetenteData.endereco.logradouro);
+            console.log('- Número:', remetenteData.endereco.numero);
+            console.log('- Bairro:', remetenteData.endereco.bairro);
+            console.log('- Cidade:', remetenteData.endereco.cidade);
+            console.log('- UF:', remetenteData.endereco.uf);
+            console.log('- CEP:', remetenteData.endereco.cep);
+            if (!remetenteData.cnpj) {
+                validationErrors.push('CNPJ do remetente não configurado');
+            }
+            if (!remetenteData.telefone) {
+                validationErrors.push('Telefone do remetente não configurado');
+            }
+            if (!remetenteData.endereco.logradouro) {
+                validationErrors.push('Logradouro do remetente não configurado');
+            }
+            if (!remetenteData.endereco.numero) {
+                validationErrors.push('Número do endereço do remetente não configurado');
+            }
+            if (!remetenteData.endereco.bairro) {
+                validationErrors.push('Bairro do remetente não configurado');
+            }
+            if (!remetenteData.endereco.cidade) {
+                validationErrors.push('Cidade do remetente não configurada');
+            }
+            if (!remetenteData.endereco.uf) {
+                validationErrors.push('UF do remetente não configurada');
+            }
+            if (!remetenteData.endereco.cep) {
+                validationErrors.push('CEP do remetente não configurado');
+            }
+            if (!dadosPedido.destinatario.nome || dadosPedido.destinatario.nome.trim().length < 3) {
+                validationErrors.push('Nome do destinatário deve ter pelo menos 3 caracteres');
+            }
+            if (!dadosPedido.destinatario.endereco.logradouro || dadosPedido.destinatario.endereco.logradouro.trim().length < 3) {
+                validationErrors.push('Logradouro do destinatário deve ter pelo menos 3 caracteres');
+            }
+            if (!dadosPedido.destinatario.endereco.numero) {
+                validationErrors.push('Número do endereço do destinatário é obrigatório');
+            }
+            if (!dadosPedido.destinatario.endereco.bairro || dadosPedido.destinatario.endereco.bairro.trim().length < 2) {
+                validationErrors.push('Bairro do destinatário deve ter pelo menos 2 caracteres');
+            }
+            if (!dadosPedido.destinatario.endereco.cidade || dadosPedido.destinatario.endereco.cidade.trim().length < 2) {
+                validationErrors.push('Cidade do destinatário deve ter pelo menos 2 caracteres');
+            }
+            if (!dadosPedido.destinatario.endereco.uf || dadosPedido.destinatario.endereco.uf.length !== 2) {
+                validationErrors.push('UF do destinatário deve ter exatamente 2 caracteres');
+            }
+            if (!dadosPedido.destinatario.documento || dadosPedido.destinatario.documento.replace(/\D/g, '').length < 11) {
+                validationErrors.push('Documento do destinatário deve ter pelo menos 11 dígitos (CPF)');
+            }
+            const cepDestinoLimpo = limparCEP(dadosPedido.destinatario.endereco.cep);
+            if (!cepDestinoLimpo || cepDestinoLimpo.length !== 8) {
+                validationErrors.push(`CEP do destinatário inválido: ${dadosPedido.destinatario.endereco.cep}`);
+            }
+            const cepOrigemLimpo = limparCEP(remetenteData.endereco.cep);
+            if (!cepOrigemLimpo || cepOrigemLimpo.length !== 8) {
+                validationErrors.push(`CEP do remetente inválido: ${remetenteData.endereco.cep}`);
+            }
+            if (validationErrors.length > 0) {
+                console.error('❌ Erros de validação encontrados:');
+                validationErrors.forEach(error => console.error(`   - ${error}`));
+                throw new Error(`Validação falhou: ${validationErrors.join('; ')}`);
+            }
+            // ✅ VALIDAÇÕES E FORMATAÇÕES ESPECÍFICAS DA API DOS CORREIOS
+            // 1. Validar e formatar telefone do remetente (deve ter exatamente 10 ou 11 dígitos)
+            const telefoneRemetenteLimpo = remetenteData.telefone.replace(/\D/g, '');
+            if (telefoneRemetenteLimpo.length < 10 || telefoneRemetenteLimpo.length > 11) {
+                throw new Error(`Telefone do remetente inválido: "${remetenteData.telefone}". Deve ter 10 ou 11 dígitos.`);
+            }
+            // 2. Validar e formatar CNPJ do remetente (deve ter exatamente 14 dígitos)
+            const cnpjRemetenteLimpo = remetenteData.cnpj.replace(/\D/g, '');
+            if (cnpjRemetenteLimpo.length !== 14) {
+                throw new Error(`CNPJ do remetente inválido: "${remetenteData.cnpj}". Deve ter exatamente 14 dígitos.`);
+            }
+            // 3. Validar e formatar telefone do destinatário
+            const telefoneDestinatarioLimpo = ((_a = dadosPedido.destinatario.telefone) === null || _a === void 0 ? void 0 : _a.replace(/\D/g, '')) || '';
+            // 4. Validar e formatar documento do destinatário
+            const documentoDestinatarioLimpo = dadosPedido.destinatario.documento.replace(/\D/g, '');
+            if (documentoDestinatarioLimpo.length !== 11 && documentoDestinatarioLimpo.length !== 14) {
+                throw new Error(`Documento do destinatário inválido: "${dadosPedido.destinatario.documento}". Deve ser CPF (11 dígitos) ou CNPJ (14 dígitos).`);
+            }
+            console.log('🔧 Dados processados e validados:');
+            console.log('- CNPJ remetente:', cnpjRemetenteLimpo);
+            console.log('- Tel. remetente:', telefoneRemetenteLimpo);
+            console.log('- Doc. destinatário:', documentoDestinatarioLimpo);
+            console.log('- Tel. destinatário:', telefoneDestinatarioLimpo);
+            console.log('- CEP origem:', remetenteData.endereco.cep.replace(/\D/g, ''));
+            console.log('- CEP destino:', dadosPedido.destinatario.endereco.cep.replace(/\D/g, ''));
+            // ✅ PAYLOAD CORRIGIDO BASEADO NA DOCUMENTAÇÃO OFICIAL RequestPrePostagemExternaDTO
+            const payload = {
+                // ✅ CAMPOS OBRIGATÓRIOS BÁSICOS
+                codigoServico: dadosPedido.servico,
+                pesoInformado: Math.round(dadosPedido.peso * 1000).toString(), // ✅ String conforme documentação
+                codigoFormatoObjetoInformado: "2", // ✅ "2" = Caixa/Pacote (conforme documentação)
+                // ✅ DIMENSÕES OBRIGATÓRIAS PARA FORMATO CAIXA/PACOTE (em cm, como string)
+                alturaInformada: "10",
+                larguraInformada: "25",
+                comprimentoInformado: "35",
+                // ✅ CAMPO OBRIGATÓRIO: Objetos não proibidos
+                cienteObjetoNaoProibido: "1", // ✅ "1" = objeto permitido (conforme documentação)
+                // ✅ REMETENTE COMPLETO (conforme schema RemetenteDTO)
+                remetente: {
+                    nome: remetenteData.nome,
+                    cpfCnpj: cnpjRemetenteLimpo, // ✅ Campo correto: cpfCnpj (não cnpj)
+                    endereco: {
+                        cep: remetenteData.endereco.cep.replace(/\D/g, ''),
+                        logradouro: remetenteData.endereco.logradouro,
+                        numero: remetenteData.endereco.numero,
+                        complemento: remetenteData.endereco.complemento || "",
+                        bairro: remetenteData.endereco.bairro,
+                        cidade: remetenteData.endereco.cidade,
+                        uf: remetenteData.endereco.uf
+                    },
+                    // ✅ TELEFONE FORMATADO CORRETAMENTE: DDD + número separados
+                    dddTelefone: telefoneRemetenteLimpo.substring(0, 2), // ✅ DDD separado
+                    telefone: telefoneRemetenteLimpo.length === 10 ? telefoneRemetenteLimpo.substring(2) : undefined, // ✅ Número fixo (8 dígitos)
+                    dddCelular: telefoneRemetenteLimpo.length === 11 ? telefoneRemetenteLimpo.substring(0, 2) : undefined, // ✅ DDD celular
+                    celular: telefoneRemetenteLimpo.length === 11 ? telefoneRemetenteLimpo.substring(2) : undefined, // ✅ Número celular (9 dígitos)
+                    email: process.env.CORREIOS_REMETENTE_EMAIL || "MARCELO.PROCOPIO@EGASOLUTIONS.COM.BR"
+                },
+                // ✅ DESTINATÁRIO COMPLETO (conforme schema DestinatarioDTO)
+                destinatario: Object.assign(Object.assign(Object.assign({ nome: dadosPedido.destinatario.nome, cpfCnpj: documentoDestinatarioLimpo, endereco: {
+                        cep: dadosPedido.destinatario.endereco.cep.replace(/\D/g, ''),
+                        logradouro: dadosPedido.destinatario.endereco.logradouro,
+                        numero: dadosPedido.destinatario.endereco.numero,
+                        complemento: dadosPedido.destinatario.endereco.complemento || "",
+                        bairro: dadosPedido.destinatario.endereco.bairro,
+                        cidade: dadosPedido.destinatario.endereco.cidade,
+                        uf: dadosPedido.destinatario.endereco.uf
+                    } }, (telefoneDestinatarioLimpo.length === 10 && {
+                    dddTelefone: telefoneDestinatarioLimpo.substring(0, 2),
+                    telefone: telefoneDestinatarioLimpo.substring(2)
+                })), (telefoneDestinatarioLimpo.length === 11 && {
+                    dddCelular: telefoneDestinatarioLimpo.substring(0, 2),
+                    celular: telefoneDestinatarioLimpo.substring(2)
+                })), { email: dadosPedido.destinatario.email || "" }),
+                // ✅ DECLARAÇÃO DE CONTEÚDO (conforme schema ItemDeclaracaoConteudo)
+                itensDeclaracaoConteudo: [
+                    {
+                        conteudo: "Produtos Kimono Store", // ✅ Nome correto do campo
+                        quantidade: "1", // ✅ String conforme documentação
+                        valor: Number(dadosPedido.valor || 0).toFixed(2) // ✅ String com 2 decimais
+                    }
+                ],
+                // ✅ OBSERVAÇÃO (opcional, max 50 caracteres)
+                observacao: `Pedido #${dadosPedido.orderId}`.substring(0, 50)
+            };
+            console.log('📦 Payload FINAL validado e corrigido:');
+            console.log(`- Serviço: ${payload.codigoServico}`);
+            console.log(`- Peso: ${payload.pesoInformado}g`);
+            console.log(`- Formato: Pacote (${payload.codigoFormatoObjetoInformado})`);
+            console.log(`- Dimensões: ${payload.alturaInformada}x${payload.larguraInformada}x${payload.comprimentoInformado}cm`);
+            console.log(`- CNPJ Remetente: ${payload.remetente.cpfCnpj} (${payload.remetente.cpfCnpj.length} dígitos)`);
+            console.log(`- Tel. Remetente: ${payload.remetente.dddTelefone}${payload.remetente.telefone} (${((_b = payload.remetente.telefone) === null || _b === void 0 ? void 0 : _b.length) || 0} dígitos)`);
+            console.log(`- Cel. Remetente: ${payload.remetente.dddCelular || ''}${payload.remetente.celular || ''} (${(payload.remetente.celular || '').length} dígitos)`);
+            console.log(`- Doc. Destinatário: ${payload.destinatario.cpfCnpj} (${payload.destinatario.cpfCnpj.length} dígitos)`);
+            console.log(`- Tel. Destinatário: ${payload.destinatario.dddTelefone || ''}${payload.destinatario.telefone || ''} (${(payload.destinatario.telefone || '').length} dígitos)`);
+            console.log(`- Cel. Destinatário: ${payload.destinatario.dddCelular || ''}${payload.destinatario.celular || ''} (${(payload.destinatario.celular || '').length} dígitos)`);
+            console.log(`- Objetos proibidos: ${payload.cienteObjetoNaoProibido}`);
+            console.log(`- Declaração valor: R$ ${payload.itensDeclaracaoConteudo[0].valor}`);
+            // ✅ VALIDAÇÕES FINAIS CRÍTICAS
+            console.log('🔍 VALIDAÇÃO FINAL DO PAYLOAD:');
+            // Validar telefone/celular do remetente
+            const telefoneRemetente = payload.remetente.telefone ? `${payload.remetente.dddTelefone}${payload.remetente.telefone}` : '';
+            const celularRemetente = payload.remetente.celular ? `${payload.remetente.dddCelular}${payload.remetente.celular}` : '';
+            if (!telefoneRemetente && !celularRemetente) {
+                throw new Error(`Telefone ou celular do remetente é obrigatório.`);
+            }
+            if (telefoneRemetente && telefoneRemetente.length !== 10) {
+                throw new Error(`Telefone do remetente inválido: "${telefoneRemetente}". Deve ter exatamente 10 dígitos.`);
+            }
+            if (celularRemetente && celularRemetente.length !== 11) {
+                throw new Error(`Celular do remetente inválido: "${celularRemetente}". Deve ter exatamente 11 dígitos.`);
+            }
+            // Validar CNPJ do remetente
+            if (!payload.remetente.cpfCnpj || payload.remetente.cpfCnpj.length !== 14) {
+                throw new Error(`CNPJ do remetente inválido: "${payload.remetente.cpfCnpj}". Deve ter 14 dígitos.`);
+            }
+            // Validar formato do objeto
+            if (!payload.codigoFormatoObjetoInformado || payload.codigoFormatoObjetoInformado !== "2") {
+                throw new Error(`Formato do objeto inválido: "${payload.codigoFormatoObjetoInformado}". Deve ser "2".`);
+            }
+            // Validar objetos proibidos
+            if (!payload.cienteObjetoNaoProibido || payload.cienteObjetoNaoProibido !== "1") {
+                throw new Error(`Campo cienteObjetoNaoProibido inválido: "${payload.cienteObjetoNaoProibido}". Deve ser "1".`);
+            }
+            // Validar declaração de conteúdo
+            if (!payload.itensDeclaracaoConteudo || payload.itensDeclaracaoConteudo.length === 0) {
+                throw new Error(`Declaração de conteúdo inválida ou vazia.`);
+            }
+            // Validar peso
+            const pesoNumerico = parseInt(payload.pesoInformado);
+            if (!payload.pesoInformado || pesoNumerico <= 0) {
+                throw new Error(`Peso inválido: ${payload.pesoInformado}g. Deve ser maior que 0.`);
+            }
+            console.log('✅ Todas as validações passaram. Enviando para a API...');
+            console.log('🔍 Payload com estrutura nested validado:', JSON.stringify(payload, null, 2));
+            // Chamar API dos Correios
+            try {
+                console.log(`🌐 Enviando requisição para: ${this.apiClient.defaults.baseURL}${correios_1.CORREIOS_CONFIG.endpoints.prepostagem.criar}`);
+                console.log(`🔑 Token: ${this.token ? 'Presente' : 'AUSENTE'}`);
+                const response = yield this.apiClient.post(correios_1.CORREIOS_CONFIG.endpoints.prepostagem.criar, payload, {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'Authorization': `Bearer ${this.token}`
+                    },
+                    timeout: 60000 // 60 segundos
+                });
+                console.log(`✅ Resposta recebida - Status: ${response.status}`);
+                console.log(`✅ Dados da resposta:`, JSON.stringify(response.data, null, 2));
+                const resultado = response.data;
+                if (resultado && (resultado.codigoObjeto || resultado.id)) {
+                    const codigoRastreio = resultado.codigoObjeto || resultado.id;
+                    console.log(`🎉 Prepostagem criada com SUCESSO! Código: ${codigoRastreio}`);
+                    return Object.assign(Object.assign({}, resultado), { codigoObjeto: codigoRastreio });
+                }
+                else {
+                    console.error(`❌ Resposta sem código de rastreio:`, JSON.stringify(resultado));
+                    return {
+                        id: '',
+                        codigoObjeto: '',
+                        valorPostagem: 0,
+                        prazoEntrega: 0,
+                        dataPrevisaoPostagem: '',
+                        erro: 'CODIGO_AUSENTE',
+                        mensagem: 'API dos Correios não retornou código de rastreio'
+                    };
+                }
+            }
+            catch (error) {
+                console.error(`💥 === ERRO NA PREPOSTAGEM - PEDIDO ${dadosPedido.orderId} ===`);
+                console.error(`❌ Mensagem: ${error.message}`);
+                if (error.response) {
+                    console.error(`❌ Status HTTP: ${error.response.status}`);
+                    console.error(`❌ Headers:`, JSON.stringify(error.response.headers || {}, null, 2));
+                    console.error(`❌ Dados do erro:`, JSON.stringify(error.response.data || {}, null, 2));
+                    // Análise detalhada dos erros
+                    const errorData = error.response.data;
+                    let mensagemErro = 'Erro desconhecido na API dos Correios';
+                    if (errorData) {
+                        if (typeof errorData === 'string') {
+                            mensagemErro = errorData;
+                        }
+                        else if (errorData.mensagem) {
+                            mensagemErro = errorData.mensagem;
+                        }
+                        else if (errorData.message) {
+                            mensagemErro = errorData.message;
+                        }
+                        else if (errorData.erro) {
+                            mensagemErro = errorData.erro;
+                        }
+                        else if (errorData.errors && Array.isArray(errorData.errors)) {
+                            mensagemErro = errorData.errors.map((e) => e.message || e.mensagem || e).join('; ');
+                        }
+                    }
+                    // Códigos de erro específicos
+                    if (error.response.status === 400) {
+                        console.error(`❌ ERRO 400: Dados inválidos enviados para os Correios`);
+                        console.error(`💡 Verifique: telefones, documentos, CEPs, peso, dimensões`);
+                    }
+                    else if (error.response.status === 401) {
+                        console.error(`❌ ERRO 401: Token inválido ou expirado`);
+                        console.error(`💡 Tentando renovar token...`);
+                        this.token = null;
+                        this.tokenExpiration = null;
+                    }
+                    else if (error.response.status === 403) {
+                        console.error(`❌ ERRO 403: Sem permissão para usar esta API`);
+                        console.error(`💡 Verifique se seu contrato tem acesso à API de prepostagem`);
+                    }
+                    else if (error.response.status === 422) {
+                        console.error(`❌ ERRO 422: Dados de negócio inválidos`);
+                        console.error(`💡 Verifique regras específicas dos Correios`);
+                    }
+                    return {
+                        id: '',
+                        codigoObjeto: '',
+                        valorPostagem: 0,
+                        prazoEntrega: 0,
+                        dataPrevisaoPostagem: '',
+                        erro: `HTTP_${error.response.status}`,
+                        mensagem: mensagemErro
+                    };
+                }
+                else {
+                    console.error(`❌ Erro de rede ou timeout:`, error.message);
+                    return {
+                        id: '',
+                        codigoObjeto: '',
+                        valorPostagem: 0,
+                        prazoEntrega: 0,
+                        dataPrevisaoPostagem: '',
+                        erro: 'ERRO_REDE',
+                        mensagem: `Erro de comunicação: ${error.message}`
+                    };
+                }
+            }
+            finally {
+                console.log(`🏁 === FIM DA PREPOSTAGEM - PEDIDO ${dadosPedido.orderId} ===`);
+            }
         });
     }
     /**

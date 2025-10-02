@@ -658,6 +658,13 @@ const checkPaymentStatus = (req, res) => __awaiter(void 0, void 0, void 0, funct
                     catch (stockError) {
                         console.error(`❌ Erro ao reduzir estoque via verificação do pedido ${order.id}:`, stockError);
                     }
+                    // ✅ ATUALIZAR USO DO CUPOM
+                    try {
+                        yield (0, orders_controller_1.updateCouponUsage)(order.id);
+                    }
+                    catch (couponError) {
+                        console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${order.id}:`, couponError);
+                    }
                 }
             }
             // Preparar informações do pagamento para retorno
@@ -793,6 +800,13 @@ const mercadoPagoWebhook = (req, res) => __awaiter(void 0, void 0, void 0, funct
                 }
                 catch (stockError) {
                     console.error(`❌ Erro ao reduzir estoque via webhook (payment.controller) do pedido ${orderId}:`, stockError);
+                }
+                // ✅ ATUALIZAR USO DO CUPOM
+                try {
+                    yield (0, orders_controller_1.updateCouponUsage)(orderId);
+                }
+                catch (couponError) {
+                    console.error(`❌ Erro ao atualizar uso do cupom para o pedido ${orderId}:`, couponError);
                 }
             }
         }
@@ -1535,10 +1549,7 @@ const processGuestBoletoPayment = (req, res) => __awaiter(void 0, void 0, void 0
                 address: {
                     zip_code: orderData.address.zipCode,
                     street_name: orderData.address.street,
-                    street_number: orderData.address.number,
-                    neighborhood: orderData.address.neighborhood,
-                    city: orderData.address.city,
-                    federal_unit: orderData.address.state
+                    street_number: orderData.address.number
                 }
             }, date_of_expiration: dueDate.toISOString() }, (process.env.API_URL && !process.env.API_URL.includes('localhost') && {
             notification_url: `${process.env.API_URL}/api/payment/webhook`
