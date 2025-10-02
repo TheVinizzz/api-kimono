@@ -77,6 +77,7 @@ const settings_routes_1 = __importDefault(require("./routes/settings.routes"));
 const product_images_routes_1 = __importDefault(require("./routes/product-images.routes"));
 const tracking_routes_1 = __importDefault(require("./routes/tracking.routes"));
 const coupons_routes_1 = __importDefault(require("./routes/coupons.routes"));
+const contact_routes_1 = __importDefault(require("./routes/contact.routes"));
 // Inicializar o app
 const app = (0, express_1.default)();
 let server; // Changed to any to avoid type issues with express.Server
@@ -175,6 +176,7 @@ app.use('/api/settings', settings_routes_1.default);
 app.use('/api/invoices', invoice_routes_1.default);
 app.use('/api/thermal-invoices', thermal_invoice_routes_1.default);
 app.use('/api/coupons', coupons_routes_1.default);
+app.use('/api', contact_routes_1.default);
 // Health check da API
 app.get('/api/health', (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
